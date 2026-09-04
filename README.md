@@ -68,7 +68,7 @@ Aşağıdaki metotlar `TDK` sınıfı üzerinden statik olarak erişilebilir dur
 - **`TDK.syllabicate(word)`**: Kelimeyi Türkçe heceleme kurallarına göre doğru hecelerine ayırır (Örn: `['mu', 'vaf', 'fa', 'ki', 'yet']`). API isteği atmaz, çok hızlıdır.
 - **`TDK.checkVowelHarmony(word)`**: Kelimenin büyük ünlü uyumuna uyup uymadığını (boolean) kontrol eder.
 - **`TDK.getPartOfSpeech(word)`**: Kelimenin sözcük türünü (isim, sıfat, zarf vb.) döndürür.
-- **`TDK.checkSpelling(word)`**: Kelimenin doğru yazılıp yazılmadığını kontrol eder. Önce TDK'nin "sık yapılan yanlışlar" listesinde tam eşleşme arar; bulamazsa TDK'nin ~81 bin kelimelik tam madde listesi üzerinde edit-distance (Levenshtein) ile en yakın kelimeyi önerir (örn. `herkez` → `herkes`, `mektub` → `mektup`).
+- **`TDK.checkSpelling(word)`**: Kelimenin doğru yazılıp yazılmadığını kontrol eder. Önce TDK'nin "sık yapılan yanlışlar" listesinde tam eşleşme arar; bulamazsa TDK'nin ~81 bin kelimelik tam madde listesi üzerinde Damerau-Levenshtein edit-distance ile en yakın kelimeyi önerir (bitişik harf yer değiştirmelerini de tek düzeltme sayar; örn. `herkez` → `herkes`, `mektub` → `mektup`, `yanlız` → `yalnız`). Kelime sıklığı verisi olmadığı için nadiren aynı mesafedeki iki aday arasında beklenenden farklı biri seçilebilir.
 - **`TDK.getCompoundWords(word)`**: Aranan kelime ile oluşturulmuş birleşik kelimeleri (Örn: dolma kalem) listeler.
 
 ### 3. Edebi ve Kültürel Analiz
@@ -79,7 +79,7 @@ Aşağıdaki metotlar `TDK` sınıfı üzerinden statik olarak erişilebilir dur
 - **`TDK.groupByOrigin(words)`**: Bir kelime listesini etimolojik kökenlerine göre gruplar (bulunamayanlar `"Bilinmiyor"` altında toplanır).
 - **`TDK.getSynonyms(word)`** / **`TDK.getAntonyms(word)`**: Kelimenin eş/zıt anlamlılarını döner (undocumented `gts-yeni` endpoint'i üzerinden; sonuç bulunamazsa `[]`).
 - **`TDK.compareWords(a, b)`**: İki kelimeyi anlam sayısı, köken, hece bölünüşü ve büyük ünlü uyumu açısından yan yana karşılaştırır.
-- **`TDK.analyzeText(text)`**: Bir metindeki (Türkçe bağlaçlar/edatlar hariç) her benzersiz kelimeyi tek tek arayıp ilk anlamını ve kökenini döner.
+- **`TDK.analyzeText(text)`**: Bir metindeki (Türkçe bağlaçlar/edatlar hariç) her benzersiz kelimeyi tek tek arayıp ilk anlamını ve kökenini döner. Not: TDK yalnızca yalın (sözlük) biçimleri indeksliyor, morfolojik analiz yapmıyor — bu yüzden "evde", "dildir" gibi ek almış kelimeler kökleri (`ev`, `dil`) sözlükte olsa bile `found: false` döner; bu veri kaynağının doğal bir sınırlılığıdır.
 
 ### 4. Yardımcı Metotlar
 - **`TDK.getSuggestions(prefix)`**: TDK'nin ~81 bin kelimelik tam madde listesi üzerinden önek bazlı otomatik tamamlama önerileri döner (ilk çağrıda listeyi indirip önbelleğe alır, sonraki çağrılar anlıktır).
@@ -88,7 +88,7 @@ Aşağıdaki metotlar `TDK` sınıfı üzerinden statik olarak erişilebilir dur
 - **`TDK.getWordOfTheDay()`**: `getDailyContent()`'in üzerine ince bir katman; günün kelimesini ve tüm anlamlarını `{ word, meanings }` şeklinde döner.
 - **`TDK.getRandomWord()`**: Günün içeriğindeki kelime ve atasözü havuzundan rastgele bir tanesini `{ type: "kelime" | "atasoz", madde, anlam }` şeklinde seçer (not: tüm sözlük değil, sadece o günkü içerik havuzundan seçim yapar).
 - **`TDK.getKurallar()`**: TDK'nin `/icerik` akışının o an döndürdüğü yazım kuralı sayfa(lar)ını `{ adi, url }` şeklinde listeler. Not: bu sabit bir katalog değildir — `/icerik` her istekte, yaklaşık yirmi kurallık bir havuzdan rastgele tek bir kural döndürür.
-- **`TDK.getRule(name)`**: Adı verilen (küçük/büyük harf duyarsız, alt dize eşleşmesi) yazım kuralının tam metnini `tdk.gov.tr`'den çekip düz metne çevirir. `getKurallar()`'ın rastgeleliği yüzünden istenen kuralı bulana kadar sınırlı sayıda (en fazla 25, aralarda kısa bekleme ile) yeniden dener; bulamazsa veya sayfa ayrıştırılamazsa `null` döner.
+- **`TDK.getRule(name)`**: Adı verilen (küçük/büyük harf duyarsız, alt dize eşleşmesi) yazım kuralının tam metnini `tdk.gov.tr`'den çekip düz metne çevirir. `getKurallar()`'ın rastgeleliği yüzünden istenen kuralı bulana kadar eşzamanlı gruplar hâlinde (toplam en fazla 25 deneme, ~5 round-trip'e sığdırılmış) yeniden dener; bulamazsa veya sayfa ayrıştırılamazsa `null` döner.
 
 ## Hata Yönetimi
 

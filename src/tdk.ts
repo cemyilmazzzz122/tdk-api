@@ -681,6 +681,11 @@ export class TDK {
    * Analyzes every distinct word in a text (Turkish stopwords filtered out),
    * returning each word's first meaning and etymological origin if found.
    * Looks each word up individually (throttled), so scales with text length.
+   * TDK only indexes dictionary (dictionary/root) forms, not inflected ones —
+   * it does no morphological analysis, and neither does this method: a
+   * suffixed word like "evde" or "dildir" (root "ev"/"dil" plus a case/verb
+   * suffix) will come back `found: false` even though the root is a real
+   * headword. This is an inherent limitation of the data source, not a bug.
    */
   public static async analyzeText(text: string): Promise<WordAnalysis[]> {
     const words = text
