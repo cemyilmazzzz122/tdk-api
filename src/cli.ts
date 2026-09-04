@@ -21,6 +21,7 @@ const KNOWN_COMMANDS = new Set([
   "kural",
   "karsilastir",
   "analiz",
+  "oneri",
 ]);
 
 let command = args[0];
@@ -51,7 +52,7 @@ async function run() {
   if (!command || command === "--help" || command === "-h") {
     console.log("Kullanım: tdk [komut] <kelime> [--json]");
     console.log(
-      "Komutlar: ara, anlam, koken, ornek, hece, uyum, yazim, gunun, rastgele, esanlam, karsit, yabanci, kurallar, kural, karsilastir, analiz"
+      "Komutlar: ara, anlam, koken, ornek, hece, uyum, yazim, gunun, rastgele, esanlam, karsit, yabanci, kurallar, kural, karsilastir, analiz, oneri"
     );
     console.log("Not: Komut belirtilmezse doğrudan kelime anlamı aranır (örn: tdk selam)");
     process.exit(command ? 0 : 1);
@@ -240,6 +241,19 @@ async function run() {
                 console.log(`${a.word}: bulunamadı`);
               }
             });
+          }
+        });
+        break;
+      }
+
+      case "oneri": {
+        if (!word) throw new Error("Önek belirtmelisiniz.");
+        const suggestions = await TDK.getSuggestions(word);
+        printResult(suggestions, () => {
+          if (suggestions.length === 0) {
+            console.log("Öneri bulunamadı.");
+          } else {
+            suggestions.forEach((s, i) => console.log(`${i + 1}. ${s}`));
           }
         });
         break;
