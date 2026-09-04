@@ -219,19 +219,19 @@ export class TDK {
   }
 
   /**
-   * Looks up the internal audio id ("seskod") for a word via the same
-   * `api.sozluk.gov.tr/gts-yeni` endpoint the official web UI calls to build
-   * its pronunciation button. That endpoint 403s unless the request looks
-   * like it came from a browser tab on sozluk.gov.tr: it needs an
-   * `Origin`/`Referer` pair matching that site AND a browser-like
+   * Calls the `api.sozluk.gov.tr/gts-yeni` endpoint the official web UI uses
+   * internally (richer than the public `/gts`: includes `seskod`,
+   * `anlamEsAnlam`/`anlamKarsitAnlam`, etc). That endpoint 403s unless the
+   * request looks like it came from a browser tab on sozluk.gov.tr: it needs
+   * an `Origin`/`Referer` pair matching that site AND a browser-like
    * `User-Agent` (our usual `TDK-API-Nodejs-Wrapper/…` UA gets rejected).
    * `fetch` (undici) also strips a manually-set `Origin` header as a
    * forbidden header name, so this uses `node:https` directly instead.
    * This is inherently fragile scraping of an undocumented endpoint — if
    * TDK tightens this check further, this should fail closed to `null`
-   * (already does) rather than throw.
+   * rather than throw.
    */
-  private static fetchSeskod(word: string): Promise<string | null> {
+  private static fetchGtsYeni(word: string): Promise<any[] | null> {
     return new Promise((resolve) => {
       const req = https.request(
         {
@@ -251,8 +251,7 @@ export class TDK {
           res.on("end", () => {
             try {
               const data = JSON.parse(body);
-              const seskod = Array.isArray(data) ? data[0]?.seskod : undefined;
-              resolve(seskod ? String(seskod) : null);
+              resolve(Array.isArray(data) ? data : null);
             } catch {
               resolve(null);
             }
@@ -262,6 +261,54 @@ export class TDK {
       req.on("error", () => resolve(null));
       req.end();
     });
+  }
+
+  private static async fetchSeskod(word: string): Promise<string | null> {
+    const data = await this.fetchGtsYeni(word);
+    const seskod = data?.[0]?.seskod;
+    return seskod ? String(seskod) : null;
+  }
+
+  /**
+   * Returns synonyms ("eş anlamlı kelimeler") recorded for the word, pooled
+   * across all of its meanings. Uses the same undocumented `gts-yeni`
+   * endpoint as `getAudioUrl` — returns `[]` if the lookup fails.
+   */
+  public static async getSynonyms(word: string): Promise<string[]> {
+    if (!word || word.trim() === "") return [];
+    const data = await this.fetchGtsYeni(word.trim().toLocaleLowerCase("tr-TR"));
+    if (!data) return [];
+
+    const synonyms: string[] = [];
+    for (const entry of data) {
+      for (const anlam of entry.anlamlarListe ?? []) {
+        for (const es of anlam.anlamEsAnlam ?? []) {
+          if (es.deger) synonyms.push(es.deger);
+        }
+      }
+    }
+    return [...new Set(synonyms)];
+  }
+
+  /**
+   * Returns antonyms ("zıt anlamlı kelimeler") recorded for the word, pooled
+   * across all of its meanings. Uses the same undocumented `gts-yeni`
+   * endpoint as `getAudioUrl` — returns `[]` if the lookup fails.
+   */
+  public static async getAntonyms(word: string): Promise<string[]> {
+    if (!word || word.trim() === "") return [];
+    const data = await this.fetchGtsYeni(word.trim().toLocaleLowerCase("tr-TR"));
+    if (!data) return [];
+
+    const antonyms: string[] = [];
+    for (const entry of data) {
+      for (const anlam of entry.anlamlarListe ?? []) {
+        for (const ka of anlam.anlamKarsitAnlam ?? []) {
+          if (ka.deger) antonyms.push(ka.deger);
+        }
+      }
+    }
+    return [...new Set(antonyms)];
   }
 
   /**
