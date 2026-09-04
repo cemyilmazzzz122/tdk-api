@@ -35,6 +35,9 @@ tdk kural kısaltmalar
 tdk karsilastir kalem kağıt
 tdk analiz "Bu güzel kalem masanın üstünde duruyor"
 tdk oneri kale
+tdk kubbealti merhaba
+tdk nisanyan merhaba
+tdk viki merhaba
 ```
 
 Herhangi bir komuta `--json` bayrağı eklendiğinde çıktı, insan-okunur metin yerine tek satırlık JSON olarak basılır (script/otomasyon kullanımı için):
@@ -89,6 +92,14 @@ Aşağıdaki metotlar `TDK` sınıfı üzerinden statik olarak erişilebilir dur
 - **`TDK.getRandomWord()`**: Günün içeriğindeki kelime ve atasözü havuzundan rastgele bir tanesini `{ type: "kelime" | "atasoz", madde, anlam }` şeklinde seçer (not: tüm sözlük değil, sadece o günkü içerik havuzundan seçim yapar).
 - **`TDK.getKurallar()`**: TDK'nin `/icerik` akışının o an döndürdüğü yazım kuralı sayfa(lar)ını `{ adi, url }` şeklinde listeler. Not: bu sabit bir katalog değildir — `/icerik` her istekte, yaklaşık yirmi kurallık bir havuzdan rastgele tek bir kural döndürür.
 - **`TDK.getRule(name)`**: Adı verilen (küçük/büyük harf duyarsız, alt dize eşleşmesi) yazım kuralının tam metnini `tdk.gov.tr`'den çekip düz metne çevirir. `getKurallar()`'ın rastgeleliği yüzünden istenen kuralı bulana kadar eşzamanlı gruplar hâlinde (toplam en fazla 25 deneme, ~5 round-trip'e sığdırılmış) yeniden dener; bulamazsa veya sayfa ayrıştırılamazsa `null` döner.
+
+### 5. Diğer Sözlük Kaynakları
+
+TDK dışındaki bu üç kaynak da her zaman kullanılabilir/dokümante edilmiş resmî API'ler değildir; her biri **fragile scraping** (kırılgan, dokümante edilmemiş entegrasyon) — kaynak taraflarında bir değişiklik olursa `null`/`[]` dönerler, hataya düşmezler. Verinin telif/kullanım koşulları kaynağa göre farklıdır: Wiktionary içeriği CC BY-SA lisanslıdır (açık); Nişanyan Sözlük ücretsiz, açık bir kişisel/akademik kaynaktır; **Kubbealtı Lugatı ise ticari bir sözlük ürünüdür** — bu kütüphane onu da dokümante edilmemiş bir uç noktadan çekebiliyor olsa da, kullanımınızı Kubbealtı'nın kendi kullanım şartlarına göre değerlendirmeniz önerilir.
+
+- **`TDK.getKubbealti(word)`**: Kubbealtı Lugatı'nın ("Misalli Büyük Türkçe Sözlük") verilerini `{ kelime, anlam }` dizisi olarak döner (`anlam` zengin tipografi içeren ham HTML'dir). `getKubbealtiMeanings(word)` aynı veriyi düz metne çevirir. `getKubbealtiSuggestions(prefix)` Kubbealtı'nın kendi otomatik tamamlama uç noktasını kullanır (TDK'nin `getSuggestions()`'ından bağımsız, ayrı bir veri kaynağı). Not: Kubbealtı'nın veri sunucusu (`eski.lugatim.com`) sertifika zincirini eksik gönderiyor; bu kütüphane eksik ara sertifikaları ekleyerek zinciri düzgün doğruluyor (doğrulamayı kapatmıyor) — Let's Encrypt bu ara sertifikayı döndürürse bu entegrasyon `null` dönmeye başlar.
+- **`TDK.getNisanyan(word)`**: Nişanyan Sözlük'ten kelimenin etimoloji paragrafını düz metin olarak döner; kelime bulunamazsa `null`.
+- **`TDK.getWiktionary(word)`**: Türkçe Vikisözlük'ten (`tr.wiktionary.org`) resmî MediaWiki API'si (`action=query&prop=extracts`) üzerinden veri çeker — bu üçü arasında scraping olmayan, resmî ve en kararlı olanı. `{ raw, sections }` döner; `sections` metni `== Köken ==`, `=== Söyleniş ===` gibi başlıklara göre bir sözlüğe ayırır. `getWiktionarySection(word, sectionName)` tek bir bölümü (örn. `"Köken"`) büyük/küçük harf duyarsız süzer.
 
 ## Hata Yönetimi
 
