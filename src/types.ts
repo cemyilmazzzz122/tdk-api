@@ -123,4 +123,14 @@ export interface WordAnalysis {
   origin: string | null;
 }
 
+export interface KubbealtiEntry {
+  kelime: string;
+  anlam: string;
+}
+
+export interface WiktionaryEntry {
+  raw: string;
+  sections: Record<string, string>;
+}
+
 export type TDKResponse = WordInfo[] | { error: string };

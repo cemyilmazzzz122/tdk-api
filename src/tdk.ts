@@ -673,6 +673,84 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
   }
 
   /**
+   * GETs a JSON path from Kubbealtı Lugatı's data API (`eski.lugatim.com`),
+   * supplying `KUBBEALTI_EXTRA_CA` to work around that host's incomplete
+   * certificate chain (see the constant's doc comment). Fails closed to
+   * `null` on any error — network, TLS, HTTP, or JSON parse.
+   */
+  private static fetchKubbealtiJson(path: string): Promise<any> {
+    return new Promise((resolve) => {
+      const req = https.request(
+        {
+          hostname: this.KUBBEALTI_HOST,
+          path,
+          method: "GET",
+          ca: [...tls.rootCertificates, ...this.KUBBEALTI_EXTRA_CA],
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+          },
+        },
+        (res) => {
+          if (res.statusCode !== 200) {
+            res.resume();
+            resolve(null);
+            return;
+          }
+          let body = "";
+          res.on("data", (chunk) => (body += chunk));
+          res.on("end", () => {
+            try {
+              resolve(JSON.parse(body));
+            } catch {
+              resolve(null);
+            }
+          });
+        }
+      );
+      req.on("error", () => resolve(null));
+      req.end();
+    });
+  }
+
+  /**
+   * Returns Kubbealtı Lugatı ("Misalli Büyük Türkçe Sözlük") entries for a
+   * word, scraped from the site's own data API — undocumented, and Kubbealtı
+   * Lugatı is a commercial dictionary product, unlike TDK's or Wiktionary's
+   * openly-published data, so use this in line with their terms. `anlam` is
+   * raw HTML (rich typography markup); use `getKubbealtiMeanings()` for
+   * plain text. Returns `null` on any fetch/parse failure, `[]` if the word
+   * isn't found.
+   */
+  public static async getKubbealti(word: string): Promise<KubbealtiEntry[] | null> {
+    if (!word || word.trim() === "") return null;
+    const data = await this.fetchKubbealtiJson(`/rest/s/${encodeURIComponent(word.trim())}/`);
+    if (!data || !Array.isArray(data.content)) return null;
+    return data.content.map((entry: any) => ({ kelime: entry.kelime, anlam: entry.anlam }));
+  }
+
+  /**
+   * Same as `getKubbealti()` but with each entry's `anlam` HTML stripped to
+   * plain text via `htmlToPlainText()`.
+   */
+  public static async getKubbealtiMeanings(word: string): Promise<string[] | null> {
+    const entries = await this.getKubbealti(word);
+    if (!entries) return null;
+    return entries.map((e) => this.htmlToPlainText(e.anlam));
+  }
+
+  /**
+   * Autocomplete suggestions from Kubbealtı Lugatı's own typeahead endpoint
+   * (separate from `getSuggestions()`, which uses TDK's data).
+   */
+  public static async getKubbealtiSuggestions(prefix: string): Promise<string[]> {
+    if (!prefix || prefix.trim() === "") return [];
+    const data = await this.fetchKubbealtiJson(`/rest/word-search/${encodeURIComponent(prefix.trim())}`);
+    if (!Array.isArray(data)) return [];
+    return data.map((item: any) => item.display).filter(Boolean);
+  }
+
+  /**
    * Returns compound words that contain this word.
    */
   public static async getCompoundWords(word: string): Promise<string[]> {
