@@ -1,13 +1,4 @@
-import type {
-  WordInfo,
-  DailyContent,
-  SpellCheckResult,
-  WordOfTheDay,
-  DailyPick,
-  WordComparison,
-  WordAnalysis,
-  TDKRule,
-} from "./types";
+import type { WordInfo, DailyContent, SpellCheckResult, WordOfTheDay, DailyPick, TDKRule } from "./types";
 import { TDKValidationError, TDKNetworkError } from "./errors";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -416,6 +407,80 @@ export class TDK {
     if (pool.length === 0) return null;
 
     return pool[Math.floor(Math.random() * pool.length)];
+  }
+
+  /**
+   * Returns the spelling-rule page(s) ("yazım kuralları") linked from TDK's
+   * `/icerik` daily-content feed, e.g. `{ adi: "Kısaltmalar", url: "https://..." }`.
+   * Note: like `getRandomWord()`, this is NOT a fixed catalog — `/icerik`
+   * appears to hand back a single randomly-rotated rule per request, so two
+   * calls a second apart can return entirely different rules.
+   */
+  public static async getKurallar(): Promise<TDKRule[]> {
+    const daily = await this.getDailyContent();
+    return daily?.kural ?? [];
+  }
+
+  /**
+   * Fetches the full plain-text content of a named spelling rule (matched
+   * case-insensitively, substring match) from `tdk.gov.tr`. Since `/icerik`
+   * hands back a single randomly-rotated rule per request (out of a pool of
+   * roughly twenty) rather than a fixed catalog, a single `getKurallar()`
+   * draw would rarely match a given name — this re-draws (bounded, with a
+   * short delay) until it finds a match or gives up. Returns `null` if no
+   * match turns up within the attempt budget or the matched page can't be
+   * parsed.
+   */
+  public static async getRule(name: string): Promise<string | null> {
+    if (!name || name.trim() === "") return null;
+    const target = name.trim().toLocaleLowerCase("tr-TR");
+
+    for (let attempt = 0; attempt < 25; attempt++) {
+      const rules = await this.getKurallar();
+      const match = rules.find((r) => r.adi.toLocaleLowerCase("tr-TR").includes(target));
+      if (match) return this.fetchRuleText(match.url);
+      await this.delay(100);
+    }
+    return null;
+  }
+
+  /**
+   * `tdk.gov.tr` rule pages are WordPress/Avada-themed. The actual article
+   * text lives in `<div ... itemprop="text">...</div>` right before a
+   * `<footer class="entry...">` (share buttons, author box, structured-data
+   * spans) — cutting there avoids that trailing cruft.
+   */
+  private static async fetchRuleText(url: string): Promise<string | null> {
+    try {
+      const response = await fetch(url, { headers: { "User-Agent": "TDK-API-Nodejs-Wrapper/1.0" } });
+      if (!response.ok) return null;
+      const html = await response.text();
+
+      const marker = html.indexOf('itemprop="text"');
+      if (marker === -1) return null;
+      const contentStart = html.indexOf(">", marker) + 1;
+      const contentEnd = html.indexOf("<footer", contentStart);
+      if (contentEnd === -1) return null;
+
+      return this.htmlToPlainText(html.slice(contentStart, contentEnd));
+    } catch {
+      return null;
+    }
+  }
+
+  private static htmlToPlainText(html: string): string {
+    return html
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/(p|div)>/gi, "\n\n")
+      .replace(/<[^>]+>/g, "")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/&amp;/gi, "&")
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;|&rsquo;/gi, "'")
+      .replace(/[ \t]+/g, " ")
+      .replace(/[ \t]*\n[ \t]*/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
   }
 
   /**

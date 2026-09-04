@@ -98,4 +98,9 @@ export interface DailyPick {
   anlam: string;
 }
 
+export interface TDKRule {
+  adi: string;
+  url: string;
+}
+
 export type TDKResponse = WordInfo[] | { error: string };
