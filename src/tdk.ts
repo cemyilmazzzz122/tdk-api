@@ -1,4 +1,13 @@
-import type { WordInfo, DailyContent, SpellCheckResult, WordOfTheDay, DailyPick } from "./types";
+import type {
+  WordInfo,
+  DailyContent,
+  SpellCheckResult,
+  WordOfTheDay,
+  DailyPick,
+  WordComparison,
+  WordAnalysis,
+  TDKRule,
+} from "./types";
 import { TDKValidationError, TDKNetworkError } from "./errors";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -160,6 +169,31 @@ export class TDK {
     const results = await this.getWord(word);
     if (results.length === 0) return null;
     return results[0].lisan || "Türkçe";
+  }
+
+  /**
+   * Returns whether the word has a recorded foreign etymological origin.
+   * Returns `null` (instead of a boolean) when the word isn't found at all.
+   */
+  public static async isForeignWord(word: string): Promise<boolean | null> {
+    const origin = await this.getOrigin(word);
+    if (origin === null) return null;
+    return origin !== "Türkçe";
+  }
+
+  /**
+   * Groups a list of words by their etymological origin. Words not found in
+   * the dictionary are grouped under "Bilinmiyor". Throttled like getWordsBatch.
+   */
+  public static async groupByOrigin(words: string[]): Promise<Record<string, string[]>> {
+    const groups: Record<string, string[]> = {};
+    for (const word of words) {
+      const origin = (await this.getOrigin(word)) ?? "Bilinmiyor";
+      if (!groups[origin]) groups[origin] = [];
+      groups[origin].push(word);
+      await this.delay(200);
+    }
+    return groups;
   }
 
   /**
