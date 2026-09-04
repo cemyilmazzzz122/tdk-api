@@ -751,6 +751,33 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
   }
 
   /**
+   * Returns the etymology paragraph for a word from Nişanyan Sözlük, scraped
+   * from that page's server-rendered `<meta name="description">` tag (the
+   * page already puts the full etymology text there for SEO, so no need to
+   * parse the site's internal SvelteKit data format). Returns `null` if the
+   * word isn't found (the page falls back to a generic site tagline in that
+   * case) or the request fails.
+   */
+  public static async getNisanyan(word: string): Promise<string | null> {
+    if (!word || word.trim() === "") return null;
+    try {
+      const response = await fetch(
+        `https://www.nisanyansozluk.com/kelime/${encodeURIComponent(word.trim().toLocaleLowerCase("tr-TR"))}`,
+        { headers: { "User-Agent": "TDK-API-Nodejs-Wrapper/1.0" } }
+      );
+      if (!response.ok) return null;
+      const html = await response.text();
+      const match = html.match(/<meta name="description" content="([^"]*)"/);
+      if (!match) return null;
+      const description = this.htmlToPlainText(match[1]);
+      if (description === "Çağdaş Türkçenin Etimolojisi") return null;
+      return description;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Returns compound words that contain this word.
    */
   public static async getCompoundWords(word: string): Promise<string[]> {
