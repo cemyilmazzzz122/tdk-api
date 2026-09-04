@@ -14,6 +14,13 @@ const KNOWN_COMMANDS = new Set([
   "yazim",
   "gunun",
   "rastgele",
+  "esanlam",
+  "karsit",
+  "yabanci",
+  "kurallar",
+  "kural",
+  "karsilastir",
+  "analiz",
 ]);
 
 let command = args[0];
@@ -43,7 +50,9 @@ function printError(message: string) {
 async function run() {
   if (!command || command === "--help" || command === "-h") {
     console.log("Kullanım: tdk [komut] <kelime> [--json]");
-    console.log("Komutlar: ara, anlam, koken, ornek, hece, uyum, yazim, gunun, rastgele");
+    console.log(
+      "Komutlar: ara, anlam, koken, ornek, hece, uyum, yazim, gunun, rastgele, esanlam, karsit, yabanci, kurallar, kural, karsilastir, analiz"
+    );
     console.log("Not: Komut belirtilmezse doğrudan kelime anlamı aranır (örn: tdk selam)");
     process.exit(command ? 0 : 1);
   }
@@ -140,6 +149,97 @@ async function run() {
             const label = pick.type === "kelime" ? "Kelime" : "Atasözü";
             console.log(`${label}: ${pick.madde}`);
             console.log(pick.anlam);
+          }
+        });
+        break;
+      }
+
+      case "esanlam": {
+        if (!word) throw new Error("Kelime belirtmelisiniz.");
+        const synonyms = await TDK.getSynonyms(word);
+        printResult(synonyms, () => {
+          if (synonyms.length === 0) {
+            console.log("Eş anlamlı kelime bulunamadı.");
+          } else {
+            synonyms.forEach((s, i) => console.log(`${i + 1}. ${s}`));
+          }
+        });
+        break;
+      }
+
+      case "karsit": {
+        if (!word) throw new Error("Kelime belirtmelisiniz.");
+        const antonyms = await TDK.getAntonyms(word);
+        printResult(antonyms, () => {
+          if (antonyms.length === 0) {
+            console.log("Zıt anlamlı kelime bulunamadı.");
+          } else {
+            antonyms.forEach((s, i) => console.log(`${i + 1}. ${s}`));
+          }
+        });
+        break;
+      }
+
+      case "yabanci": {
+        if (!word) throw new Error("Kelime belirtmelisiniz.");
+        const foreign = await TDK.isForeignWord(word);
+        printResult({ word, foreign }, () => {
+          if (foreign === null) {
+            console.log("Kelime bulunamadı.");
+          } else {
+            console.log(foreign ? "Yabancı kökenli." : "Türkçe kökenli.");
+          }
+        });
+        break;
+      }
+
+      case "kurallar": {
+        const rules = await TDK.getKurallar();
+        printResult(rules, () => {
+          if (rules.length === 0) {
+            console.log("Kural listesi alınamadı.");
+          } else {
+            rules.forEach((r, i) => console.log(`${i + 1}. ${r.adi}`));
+          }
+        });
+        break;
+      }
+
+      case "kural": {
+        if (!word) throw new Error("Kural adı belirtmelisiniz.");
+        const rule = await TDK.getRule(word);
+        printResult(rule, () => {
+          console.log(rule ?? "Kural bulunamadı.");
+        });
+        break;
+      }
+
+      case "karsilastir": {
+        const [wordA, wordB] = args.slice(1);
+        if (!wordA || !wordB) throw new Error("İki kelime belirtmelisiniz.");
+        const comparison = await TDK.compareWords(wordA, wordB);
+        printResult(comparison, () => {
+          for (const side of [comparison.a, comparison.b]) {
+            console.log(`${side.word}: ${side.meaningCount} anlam, köken: ${side.origin ?? "bulunamadı"}, hece: ${side.syllables.join("-")}, büyük ünlü uyumu: ${side.harmony ? "uyar" : "uymaz"}`);
+          }
+        });
+        break;
+      }
+
+      case "analiz": {
+        if (!word) throw new Error("Metin belirtmelisiniz.");
+        const analysis = await TDK.analyzeText(word);
+        printResult(analysis, () => {
+          if (analysis.length === 0) {
+            console.log("Analiz edilecek kelime bulunamadı.");
+          } else {
+            analysis.forEach((a) => {
+              if (a.found) {
+                console.log(`${a.word}: ${a.meaning ?? "-"} (${a.origin})`);
+              } else {
+                console.log(`${a.word}: bulunamadı`);
+              }
+            });
           }
         });
         break;
