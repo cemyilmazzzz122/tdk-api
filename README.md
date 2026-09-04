@@ -68,7 +68,7 @@ Aşağıdaki metotlar `TDK` sınıfı üzerinden statik olarak erişilebilir dur
 - **`TDK.syllabicate(word)`**: Kelimeyi Türkçe heceleme kurallarına göre doğru hecelerine ayırır (Örn: `['mu', 'vaf', 'fa', 'ki', 'yet']`). API isteği atmaz, çok hızlıdır.
 - **`TDK.checkVowelHarmony(word)`**: Kelimenin büyük ünlü uyumuna uyup uymadığını (boolean) kontrol eder.
 - **`TDK.getPartOfSpeech(word)`**: Kelimenin sözcük türünü (isim, sıfat, zarf vb.) döndürür.
-- **`TDK.checkSpelling(word)`**: Sıkça yapılan yanlışlar listesini ve TDK veritabanını kullanarak kelimenin doğru yazılıp yazılmadığını kontrol eder. Yanlışsa doğrusunu önerir; tam eşleşme yoksa, aynı listedeki kelimeler arasında edit-distance (Levenshtein) ile en yakınını önerir (not: tüm sözlükte değil, yalnızca bu küçük havuzda arama yapar).
+- **`TDK.checkSpelling(word)`**: Kelimenin doğru yazılıp yazılmadığını kontrol eder. Önce TDK'nin "sık yapılan yanlışlar" listesinde tam eşleşme arar; bulamazsa TDK'nin ~81 bin kelimelik tam madde listesi üzerinde edit-distance (Levenshtein) ile en yakın kelimeyi önerir (örn. `herkez` → `herkes`, `mektub` → `mektup`).
 - **`TDK.getCompoundWords(word)`**: Aranan kelime ile oluşturulmuş birleşik kelimeleri (Örn: dolma kalem) listeler.
 
 ### 3. Edebi ve Kültürel Analiz

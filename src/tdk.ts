@@ -389,8 +389,10 @@ export class TDK {
     if (results.length > 0) {
       return { isCorrect: true, word };
     }
-    
-    // 2. If not, check "sıkça yapılan yanlışlar" from DailyContent
+
+    // 2. If not, check "sıkça yapılan yanlışlar" from DailyContent — an exact
+    // match here is TDK explicitly saying "X is often confused with Y", so
+    // it's authoritative when it hits (but only 2-3 rotating entries per call).
     const daily = await this.getDailyContent();
     if (daily) {
       const syydMatch = daily.syyd.find(s => s.yanliskelime.toLocaleLowerCase("tr-TR") === word.toLocaleLowerCase("tr-TR"));
@@ -401,26 +403,27 @@ export class TDK {
       if (mixMatch) {
         return { isCorrect: false, word, suggestion: mixMatch.dogru };
       }
+    }
 
-      // 3. No exact match in TDK's fixed lists: fall back to the closest word
-      // (by edit distance) within that same small pool. This is NOT a search
-      // over the full dictionary — TDK exposes no such lookup — just a
-      // best-effort nudge using the "sık yapılan yanlışlar" data we already have.
-      const candidates = [
-        ...daily.syyd.map((s) => s.dogrukelime),
-        ...daily.karistirma.flatMap((s) => [s.yanlis, s.dogru]),
-        ...daily.kelime.map((k) => k.madde),
-      ];
-      let best: { candidate: string; distance: number } | null = null;
-      for (const candidate of candidates) {
-        const distance = this.levenshtein(word.toLocaleLowerCase("tr-TR"), candidate.toLocaleLowerCase("tr-TR"));
-        if (distance > 0 && (!best || distance < best.distance)) {
-          best = { candidate, distance };
-        }
+    // 3. No exact match in TDK's curated lists: fall back to the closest
+    // headword (by edit distance) across TDK's full ~81k-word list (the same
+    // data `getSuggestions()` uses). Restricted to single-token, lowercase
+    // headwords so it doesn't suggest compounds/phrases or proper nouns.
+    if (this.autocompleteCache.length === 0) {
+      this.autocompleteCache = await this.fetchAutocompleteData();
+    }
+    const cleanWord = word.trim().toLocaleLowerCase("tr-TR");
+    let best: { candidate: string; distance: number } | null = null;
+    for (const candidate of this.autocompleteCache) {
+      if (candidate.includes(" ") || candidate !== candidate.toLocaleLowerCase("tr-TR")) continue;
+      const distance = this.levenshtein(cleanWord, candidate);
+      if (distance > 0 && (!best || distance < best.distance)) {
+        best = { candidate, distance };
+        if (distance === 1) break;
       }
-      if (best && best.distance <= 2) {
-        return { isCorrect: false, word, suggestion: best.candidate };
-      }
+    }
+    if (best && best.distance <= 2) {
+      return { isCorrect: false, word, suggestion: best.candidate };
     }
     return { isCorrect: false, word };
   }
