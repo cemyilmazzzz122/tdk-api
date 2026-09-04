@@ -1,14 +1,32 @@
 #!/usr/bin/env node
 import { TDK } from "./tdk";
 
-const args = process.argv.slice(2);
+const rawArgs = process.argv.slice(2);
+const jsonMode = rawArgs.includes("--json");
+const args = rawArgs.filter((a) => a !== "--json");
 const command = args[0];
 const word = args[1];
 
+function printResult(data: unknown, formatted: () => void) {
+  if (jsonMode) {
+    console.log(JSON.stringify(data));
+  } else {
+    formatted();
+  }
+}
+
+function printError(message: string) {
+  if (jsonMode) {
+    console.log(JSON.stringify({ error: message }));
+  } else {
+    console.log(`Hata: ${message}`);
+  }
+}
+
 async function run() {
   if (!command) {
-    console.log("Kullanım: tdk <komut> <kelime>");
-    console.log("Komutlar: ara, anlam, koken, ornek, hece, uyum, yazim");
+    console.log("Kullanım: tdk <komut> <kelime> [--json]");
+    console.log("Komutlar: ara, anlam, koken, ornek, hece, uyum, yazim, gunun, rastgele");
     process.exit(1);
   }
 
@@ -17,63 +35,104 @@ async function run() {
   try {
     switch (command) {
       case "ara":
-      case "anlam":
+      case "anlam": {
         if (!word) throw new Error("Kelime belirtmelisiniz.");
         const meanings = await TDK.getMeanings(word);
-        if (meanings.length === 0) {
-          console.log("Sonuç bulunamadı.");
-        } else {
-          meanings.forEach((m, i) => console.log(`${i + 1}. ${m}`));
-        }
+        printResult(meanings, () => {
+          if (meanings.length === 0) {
+            console.log("Sonuç bulunamadı.");
+          } else {
+            meanings.forEach((m, i) => console.log(`${i + 1}. ${m}`));
+          }
+        });
         break;
+      }
 
-      case "koken":
+      case "koken": {
         if (!word) throw new Error("Kelime belirtmelisiniz.");
         const origin = await TDK.getOrigin(word);
-        console.log(`Köken: ${origin}`);
+        printResult({ word, origin }, () => console.log(`Köken: ${origin}`));
         break;
+      }
 
-      case "ornek":
+      case "ornek": {
         if (!word) throw new Error("Kelime belirtmelisiniz.");
         const examples = await TDK.getExamples(word);
-        if (examples.length === 0) {
-          console.log("Örnek bulunamadı.");
-        } else {
-          examples.forEach((ex, i) => {
-            const yazar = ex.author ? ` (${ex.author})` : "";
-            console.log(`${i + 1}. ${ex.sentence}${yazar}`);
-          });
-        }
+        printResult(examples, () => {
+          if (examples.length === 0) {
+            console.log("Örnek bulunamadı.");
+          } else {
+            examples.forEach((ex, i) => {
+              const yazar = ex.author ? ` (${ex.author})` : "";
+              console.log(`${i + 1}. ${ex.sentence}${yazar}`);
+            });
+          }
+        });
         break;
+      }
 
-      case "hece":
+      case "hece": {
         if (!word) throw new Error("Kelime belirtmelisiniz.");
         const syllables = TDK.syllabicate(word);
-        console.log(`Heceler: ${syllables.join("-")}`);
+        printResult(syllables, () => console.log(`Heceler: ${syllables.join("-")}`));
         break;
+      }
 
-      case "uyum":
+      case "uyum": {
         if (!word) throw new Error("Kelime belirtmelisiniz.");
         const isHarmony = TDK.checkVowelHarmony(word);
-        console.log(`Büyük Ünlü Uyumu: ${isHarmony ? "Uyar" : "Uymaz"}`);
+        printResult({ word, harmony: isHarmony }, () =>
+          console.log(`Büyük Ünlü Uyumu: ${isHarmony ? "Uyar" : "Uymaz"}`)
+        );
         break;
+      }
 
-      case "yazim":
+      case "yazim": {
         if (!word) throw new Error("Kelime belirtmelisiniz.");
         const spellResult = await TDK.checkSpelling(word);
-        if (spellResult.isCorrect) {
-          console.log("Doğru yazım.");
-        } else {
-          console.log(`Yanlış yazım.${spellResult.suggestion ? " Doğrusu: " + spellResult.suggestion : ""}`);
-        }
+        printResult(spellResult, () => {
+          if (spellResult.isCorrect) {
+            console.log("Doğru yazım.");
+          } else {
+            console.log(`Yanlış yazım.${spellResult.suggestion ? " Doğrusu: " + spellResult.suggestion : ""}`);
+          }
+        });
         break;
+      }
+
+      case "gunun": {
+        const wotd = await TDK.getWordOfTheDay();
+        printResult(wotd, () => {
+          if (!wotd) {
+            console.log("Günün kelimesi alınamadı.");
+          } else {
+            console.log(`Günün kelimesi: ${wotd.word}`);
+            wotd.meanings.forEach((m, i) => console.log(`${i + 1}. ${m}`));
+          }
+        });
+        break;
+      }
+
+      case "rastgele": {
+        const pick = await TDK.getRandomWord();
+        printResult(pick, () => {
+          if (!pick) {
+            console.log("Rastgele içerik alınamadı.");
+          } else {
+            const label = pick.type === "kelime" ? "Kelime" : "Atasözü";
+            console.log(`${label}: ${pick.madde}`);
+            console.log(pick.anlam);
+          }
+        });
+        break;
+      }
 
       default:
-        console.log("Bilinmeyen komut.");
+        printError("Bilinmeyen komut.");
     }
   } catch (error) {
     if (error instanceof Error) {
-      console.log(`Hata: ${error.message}`);
+      printError(error.message);
     }
   }
 }
