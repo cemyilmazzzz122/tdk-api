@@ -520,23 +520,32 @@ export class TDK {
    * case-insensitively, substring match) from `tdk.gov.tr`. Since `/icerik`
    * hands back a single randomly-rotated rule per request (out of a pool of
    * roughly twenty) rather than a fixed catalog, a single `getKurallar()`
-   * draw would rarely match a given name — this re-draws (bounded, with a
-   * short delay) until it finds a match or gives up. Every attempt bypasses
-   * `dailyContentCache` — without that, once `enableCache(true)` is on, all
-   * 25 attempts would just re-read the same cached `/icerik` response and
-   * could never find a rule outside whatever the first draw happened to be.
-   * Returns `null` if no match turns up within the attempt budget or the
-   * matched page can't be parsed.
+   * draw would rarely match a given name — this re-draws until it finds a
+   * match or gives up. Draws happen in concurrent batches (each `/icerik`
+   * request is independent and stateless) rather than one-at-a-time with a
+   * delay: same total sample size (25) and hit probability as a sequential
+   * loop, but bounded to a handful of round-trips instead of 25 of them, so
+   * a miss resolves in roughly one round-trip time instead of several
+   * seconds. Every draw bypasses `dailyContentCache` — without that, once
+   * `enableCache(true)` is on, every attempt would just re-read the same
+   * cached `/icerik` response and could never find a rule outside whatever
+   * the first draw happened to be. Returns `null` if no match turns up
+   * within the attempt budget or the matched page can't be parsed.
    */
   public static async getRule(name: string): Promise<string | null> {
     if (!name || name.trim() === "") return null;
     const target = name.trim().toLocaleLowerCase("tr-TR");
 
-    for (let attempt = 0; attempt < 25; attempt++) {
-      const rules = await this.getKurallar(true);
-      const match = rules.find((r) => r.adi.toLocaleLowerCase("tr-TR").includes(target));
-      if (match) return this.fetchRuleText(match.url);
-      await this.delay(100);
+    const BATCH_SIZE = 5;
+    const ROUNDS = 5;
+    for (let round = 0; round < ROUNDS; round++) {
+      const batches = await Promise.all(
+        Array.from({ length: BATCH_SIZE }, () => this.getKurallar(true))
+      );
+      for (const rules of batches) {
+        const match = rules.find((r) => r.adi.toLocaleLowerCase("tr-TR").includes(target));
+        if (match) return this.fetchRuleText(match.url);
+      }
     }
     return null;
   }
