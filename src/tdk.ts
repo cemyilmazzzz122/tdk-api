@@ -49,7 +49,7 @@ export class TDK {
       throw new TDKValidationError("Word parameter cannot be empty.");
     }
 
-    const cleanWord = word.trim().toLowerCase();
+    const cleanWord = word.trim().toLocaleLowerCase("tr-TR");
 
     if (this.isCacheEnabled && this.wordCache.has(cleanWord)) {
       return this.wordCache.get(cleanWord)!;
@@ -127,9 +127,9 @@ export class TDK {
       }
     }
     
-    const cleanPrefix = prefix.toLowerCase();
+    const cleanPrefix = prefix.toLocaleLowerCase("tr-TR");
     return this.autocompleteCache
-      .filter(w => w.toLowerCase().startsWith(cleanPrefix))
+      .filter(w => w.toLocaleLowerCase("tr-TR").startsWith(cleanPrefix))
       .slice(0, 10);
   }
 
@@ -152,14 +152,14 @@ export class TDK {
   }
 
   /**
-   * Returns the etymological origin of the word if it's a foreign word.
+   * Returns the etymological origin of the word, or "Türkçe" if TDK doesn't
+   * record a foreign origin for it. Returns `null` only when the word itself
+   * isn't found in the dictionary at all.
    */
   public static async getOrigin(word: string): Promise<string | null> {
     const results = await this.getWord(word);
-    if (results.length > 0 && results[0].lisan) {
-      return results[0].lisan;
-    }
-    return "Türkçe";
+    if (results.length === 0) return null;
+    return results[0].lisan || "Türkçe";
   }
 
   /**
@@ -238,7 +238,7 @@ export class TDK {
       throw new TDKValidationError("Word parameter cannot be empty.");
     }
 
-    const seskod = await this.fetchSeskod(word.trim().toLowerCase());
+    const seskod = await this.fetchSeskod(word.trim().toLocaleLowerCase("tr-TR"));
     if (!seskod) return null;
     return `https://${this.AUDIO_API_HOST}/ses/${encodeURIComponent(seskod)}.wav`;
   }
@@ -275,11 +275,11 @@ export class TDK {
     // 2. If not, check "sıkça yapılan yanlışlar" from DailyContent
     const daily = await this.getDailyContent();
     if (daily) {
-      const syydMatch = daily.syyd.find(s => s.yanliskelime.toLowerCase() === word.toLowerCase());
+      const syydMatch = daily.syyd.find(s => s.yanliskelime.toLocaleLowerCase("tr-TR") === word.toLocaleLowerCase("tr-TR"));
       if (syydMatch) {
         return { isCorrect: false, word, suggestion: syydMatch.dogrukelime };
       }
-      const mixMatch = daily.karistirma.find(s => s.yanlis.toLowerCase() === word.toLowerCase());
+      const mixMatch = daily.karistirma.find(s => s.yanlis.toLocaleLowerCase("tr-TR") === word.toLocaleLowerCase("tr-TR"));
       if (mixMatch) {
         return { isCorrect: false, word, suggestion: mixMatch.dogru };
       }
@@ -356,17 +356,20 @@ export class TDK {
 
   /**
    * Returns the part of speech (isim, sıfat, zarf vb.).
+   * TDK's `ozelliklerListe` mixes grammatical categories (`tur: "3"`, e.g.
+   * sıfat/zarf/isim) with usage-register tags (`tur: "4"`, e.g. mecaz/argo)
+   * in the same list — only `tur === "3"` entries are actual parts of speech.
    */
   public static async getPartOfSpeech(word: string): Promise<string[]> {
     const results = await this.getWord(word);
     const pos = new Set<string>();
-    
+
     for (const result of results) {
       if (result.anlamlarListe) {
         for (const anlam of result.anlamlarListe) {
           if (anlam.ozelliklerListe) {
             for (const ozellik of anlam.ozelliklerListe) {
-              pos.add(ozellik.tam_adi);
+              if (ozellik.tur === "3") pos.add(ozellik.tam_adi);
             }
           }
         }
@@ -438,13 +441,17 @@ export class TDK {
 
   /**
    * Checks if a word follows Turkish Major Vowel Harmony (Büyük Ünlü Uyumu).
+   * Normalizes case via the Turkish locale first: a plain case-insensitive
+   * regex would fold ASCII "I" to "i", misreading the back vowel "I"
+   * (dotless) as the front vowel "i" (dotted).
    */
   public static checkVowelHarmony(word: string): boolean {
-    const backVowels = /[aıou]/i;
-    const frontVowels = /[eiöü]/i;
-    const hasBack = backVowels.test(word);
-    const hasFront = frontVowels.test(word);
-    
+    const lower = word.toLocaleLowerCase("tr-TR");
+    const backVowels = /[aıou]/;
+    const frontVowels = /[eiöü]/;
+    const hasBack = backVowels.test(lower);
+    const hasFront = frontVowels.test(lower);
+
     // If it has both front and back vowels, it breaks harmony.
     return !(hasBack && hasFront);
   }

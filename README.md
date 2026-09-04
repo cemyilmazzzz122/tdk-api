@@ -7,11 +7,11 @@ Bu proje, Türk Dil Kurumu (TDK) sözlük verilerine Node.js ortamından doğrud
 Projeyi Node.js projenize dahil etmek için aşağıdaki paket yöneticilerinden uygun olanı kullanabilirsiniz:
 
 ```bash
-npm install tdk-api
+npm install tdk-api-wrapper
 ```
 veya global yükleyerek komut satırı aracını (CLI) kullanmak için:
 ```bash
-npm install -g tdk-api
+npm install -g tdk-api-wrapper
 ```
 
 ## Komut Satırı Arayüzü (CLI) Kullanımı
