@@ -822,20 +822,10 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
     }
   }
 
-  /**
-   * Returns the Turkish Wiktionary (`tr.wiktionary.org`) entry for a word,
-   * via MediaWiki's official Action API (`action=query&prop=extracts`) — no
-   * scraping involved, this is a stable, documented public API. `sections`
-   * splits the plain-text extract on its `== Heading ==`/`=== Heading ===`
-   * markers (e.g. "Köken", "Söyleniş", "Ad") for convenience; `raw` has the
-   * unsplit text. Returns `null` if the page doesn't exist or the request
-   * fails.
-   */
-  public static async getWiktionary(word: string): Promise<WiktionaryEntry | null> {
-    if (!word || word.trim() === "") return null;
+  private static async fetchWiktionaryEntry(title: string): Promise<WiktionaryEntry | null> {
     try {
       const url = `https://tr.wiktionary.org/w/api.php?action=query&prop=extracts&titles=${encodeURIComponent(
-        word.trim()
+        title
       )}&format=json&explaintext=1&formatversion=2`;
       const response = await fetch(url, { headers: { "User-Agent": "TDK-API-Nodejs-Wrapper/1.0" } });
       if (!response.ok) return null;
@@ -857,6 +847,32 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Returns the Turkish Wiktionary (`tr.wiktionary.org`) entry for a word,
+   * via MediaWiki's official Action API (`action=query&prop=extracts`) — no
+   * scraping involved, this is a stable, documented public API. `sections`
+   * splits the plain-text extract on its `== Heading ==`/`=== Heading ===`
+   * markers (e.g. "Köken", "Söyleniş", "Ad") for convenience; `raw` has the
+   * unsplit text. This wiki has title capitalization turned off
+   * ($wgCapitalLinks=false — common for Wiktionaries, since case is
+   * meaningful for a dictionary: "Türkiye" the country vs. a lowercase
+   * common word), so an exact-case miss retries with the first letter
+   * uppercased (Turkish-locale-aware, so "istanbul" tries "İstanbul", not
+   * "Istanbul") before giving up. Returns `null` if neither is found or the
+   * request fails.
+   */
+  public static async getWiktionary(word: string): Promise<WiktionaryEntry | null> {
+    if (!word || word.trim() === "") return null;
+    const trimmed = word.trim();
+
+    const direct = await this.fetchWiktionaryEntry(trimmed);
+    if (direct) return direct;
+
+    const capitalized = trimmed.charAt(0).toLocaleUpperCase("tr-TR") + trimmed.slice(1);
+    if (capitalized === trimmed) return null;
+    return this.fetchWiktionaryEntry(capitalized);
   }
 
   /**
