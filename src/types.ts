@@ -103,4 +103,24 @@ export interface TDKRule {
   url: string;
 }
 
+export interface WordComparisonSide {
+  word: string;
+  meaningCount: number;
+  origin: string | null;
+  syllables: string[];
+  harmony: boolean;
+}
+
+export interface WordComparison {
+  a: WordComparisonSide;
+  b: WordComparisonSide;
+}
+
+export interface WordAnalysis {
+  word: string;
+  found: boolean;
+  meaning: string | null;
+  origin: string | null;
+}
+
 export type TDKResponse = WordInfo[] | { error: string };

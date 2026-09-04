@@ -1,4 +1,13 @@
-import type { WordInfo, DailyContent, SpellCheckResult, WordOfTheDay, DailyPick, TDKRule } from "./types";
+import type {
+  WordInfo,
+  DailyContent,
+  SpellCheckResult,
+  WordOfTheDay,
+  DailyPick,
+  WordComparison,
+  WordAnalysis,
+  TDKRule,
+} from "./types";
 import { TDKValidationError, TDKNetworkError } from "./errors";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -355,6 +364,26 @@ export class TDK {
       if (mixMatch) {
         return { isCorrect: false, word, suggestion: mixMatch.dogru };
       }
+
+      // 3. No exact match in TDK's fixed lists: fall back to the closest word
+      // (by edit distance) within that same small pool. This is NOT a search
+      // over the full dictionary — TDK exposes no such lookup — just a
+      // best-effort nudge using the "sık yapılan yanlışlar" data we already have.
+      const candidates = [
+        ...daily.syyd.map((s) => s.dogrukelime),
+        ...daily.karistirma.flatMap((s) => [s.yanlis, s.dogru]),
+        ...daily.kelime.map((k) => k.madde),
+      ];
+      let best: { candidate: string; distance: number } | null = null;
+      for (const candidate of candidates) {
+        const distance = this.levenshtein(word.toLocaleLowerCase("tr-TR"), candidate.toLocaleLowerCase("tr-TR"));
+        if (distance > 0 && (!best || distance < best.distance)) {
+          best = { candidate, distance };
+        }
+      }
+      if (best && best.distance <= 2) {
+        return { isCorrect: false, word, suggestion: best.candidate };
+      }
     }
     return { isCorrect: false, word };
   }
@@ -525,6 +554,94 @@ export class TDK {
       pos.add('isim'); // Default to noun if TDK doesn't specify
     }
     return Array.from(pos);
+  }
+
+  /**
+   * Compares two words side by side: meaning count, etymological origin,
+   * syllables and vowel-harmony compliance.
+   */
+  public static async compareWords(a: string, b: string): Promise<WordComparison> {
+    const [meaningsA, meaningsB, originA, originB] = await Promise.all([
+      this.getMeanings(a),
+      this.getMeanings(b),
+      this.getOrigin(a),
+      this.getOrigin(b),
+    ]);
+    return {
+      a: {
+        word: a,
+        meaningCount: meaningsA.length,
+        origin: originA,
+        syllables: this.syllabicate(a),
+        harmony: this.checkVowelHarmony(a),
+      },
+      b: {
+        word: b,
+        meaningCount: meaningsB.length,
+        origin: originB,
+        syllables: this.syllabicate(b),
+        harmony: this.checkVowelHarmony(b),
+      },
+    };
+  }
+
+  private static readonly STOPWORDS = new Set([
+    "ve", "veya", "ile", "ama", "fakat", "ancak", "de", "da", "ki", "bu", "şu", "o",
+    "bir", "çok", "az", "gibi", "için", "mi", "mı", "mu", "mü", "ne", "her", "hiç",
+    "ben", "sen", "biz", "siz", "onlar", "değil", "bile", "diye",
+  ]);
+
+  private static firstMeaning(results: WordInfo[]): string | null {
+    for (const result of results) {
+      for (const anlam of result.anlamlarListe ?? []) {
+        if (anlam.anlam) return anlam.anlam;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Analyzes every distinct word in a text (Turkish stopwords filtered out),
+   * returning each word's first meaning and etymological origin if found.
+   * Looks each word up individually (throttled), so scales with text length.
+   */
+  public static async analyzeText(text: string): Promise<WordAnalysis[]> {
+    const words = text
+      .toLocaleLowerCase("tr-TR")
+      .replace(/[^\p{L}\s]/gu, " ")
+      .split(/\s+/)
+      .filter((w) => w.length > 1 && !this.STOPWORDS.has(w));
+    const unique = [...new Set(words)];
+
+    const analyses: WordAnalysis[] = [];
+    for (const word of unique) {
+      const results = await this.getWord(word);
+      const found = results.length > 0;
+      analyses.push({
+        word,
+        found,
+        meaning: found ? this.firstMeaning(results) : null,
+        origin: found ? results[0].lisan || "Türkçe" : null,
+      });
+      await this.delay(200);
+    }
+    return analyses;
+  }
+
+  /**
+   * Classic edit-distance between two strings.
+   */
+  private static levenshtein(a: string, b: string): number {
+    const dp: number[][] = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+    for (let i = 0; i <= a.length; i++) dp[i][0] = i;
+    for (let j = 0; j <= b.length; j++) dp[0][j] = j;
+    for (let i = 1; i <= a.length; i++) {
+      for (let j = 1; j <= b.length; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
+      }
+    }
+    return dp[a.length][b.length];
   }
 
   /**
