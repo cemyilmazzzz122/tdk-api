@@ -25,6 +25,15 @@ tdk koken lisan
 tdk hece muvaffakiyet
 tdk uyum elma
 tdk yazim herkes
+tdk gunun
+tdk rastgele
+```
+
+Herhangi bir komuta `--json` bayrağı eklendiğinde çıktı, insan-okunur metin yerine tek satırlık JSON olarak basılır (script/otomasyon kullanımı için):
+
+```bash
+tdk ara kalem --json
+# ["Yazma, çizme vb. işlerde kullanılan çeşitli biçimlerde araç", ...]
 ```
 
 ## Kullanım Başlangıcı
@@ -61,8 +70,31 @@ Aşağıdaki metotlar `TDK` sınıfı üzerinden statik olarak erişilebilir dur
 
 ### 4. Yardımcı Metotlar
 - **`TDK.getSuggestions(prefix)`**: Kelimenin sadece ilk birkaç harfini girdiğinizde otomatik tamamlama önerilerini çeker.
-- **`TDK.getAudioUrl(word)`**: Varsa TDK telaffuz ses dosyasının URL'sini oluşturur. `downloadAudio(word, destPath)` ile cihazınıza indirebilirsiniz.
+- **`TDK.getAudioUrl(word)`**: TDK'nin bu kelime için gerçekten bir ses kaydı varsa doğrudan indirme URL'sini döner, yoksa `null`. `downloadAudio(word, destPath)` ile cihazınıza indirebilirsiniz.
 - **`TDK.getDailyContent()`**: TDK anasayfasında yer alan "Günün Kelimesi, Atasözü ve Kuralı" içeriklerini çeker.
+- **`TDK.getWordOfTheDay()`**: `getDailyContent()`'in üzerine ince bir katman; günün kelimesini ve tüm anlamlarını `{ word, meanings }` şeklinde döner.
+- **`TDK.getRandomWord()`**: Günün içeriğindeki kelime ve atasözü havuzundan rastgele bir tanesini `{ type: "kelime" | "atasoz", madde, anlam }` şeklinde seçer (not: tüm sözlük değil, sadece o günkü içerik havuzundan seçim yapar).
+
+## Hata Yönetimi
+
+Kütüphane, ayırt edilebilir hata sınıfları fırlatır (hepsi `Error`'dan türer):
+
+- **`TDKValidationError`**: Boş kelime gibi geçersiz bir parametre verildiğinde.
+- **`TDKNetworkError`**: Ağ isteği başarısız olduğunda, TDK sunucusu HTTP hata kodu döndüğünde veya cevap JSON olarak parse edilemediğinde (`status` ve `cause` alanlarını taşır).
+
+```typescript
+import { TDK, TDKValidationError, TDKNetworkError } from 'tdk-api';
+
+try {
+  await TDK.getWord('');
+} catch (e) {
+  if (e instanceof TDKValidationError) {
+    console.log('Geçersiz girdi:', e.message);
+  } else if (e instanceof TDKNetworkError) {
+    console.log('Ağ hatası:', e.message, e.status);
+  }
+}
+```
 
 ## Lisans
 
