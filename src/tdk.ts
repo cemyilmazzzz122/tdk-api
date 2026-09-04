@@ -714,19 +714,64 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
   }
 
   /**
+   * Kubbealtı indexes headwords with full classical Turkish orthography,
+   * including letters that a plain-ASCII-ish query tends to drop — most
+   * commonly ü/ö/ç/ğ/ş, but also the circumflex ("düzeltme işareti") used in
+   * Arabic/Persian loanwords like "rüzgâr". A search for "ruzgar" misses
+   * entirely (verified: even "ruzgâr" alone still misses — it's the missing
+   * ü, not the missing â, that actually breaks the match). This generates
+   * single-letter-substitution variants to retry, one substitution per
+   * variant (not combinatorial) — covers the overwhelmingly common case of
+   * one "de-Turkished" letter without an explosion of API calls for words
+   * with several.
+   */
+  private static readonly TURKISH_DEASCII_MAP: Record<string, string[]> = {
+    a: ["â"],
+    i: ["ı", "î"],
+    o: ["ö"],
+    u: ["ü", "û"],
+    c: ["ç"],
+    g: ["ğ"],
+    s: ["ş"],
+  };
+
+  private static generateTurkishVariants(word: string): string[] {
+    const lower = word.trim().toLocaleLowerCase("tr-TR");
+    const variants: string[] = [];
+    for (let i = 0; i < lower.length; i++) {
+      for (const replacement of this.TURKISH_DEASCII_MAP[lower[i]] ?? []) {
+        variants.push(lower.slice(0, i) + replacement + lower.slice(i + 1));
+      }
+    }
+    return variants;
+  }
+
+  /**
    * Returns Kubbealtı Lugatı ("Misalli Büyük Türkçe Sözlük") entries for a
    * word, scraped from the site's own data API — undocumented, and Kubbealtı
    * Lugatı is a commercial dictionary product, unlike TDK's or Wiktionary's
    * openly-published data, so use this in line with their terms. `anlam` is
    * raw HTML (rich typography markup); use `getKubbealtiMeanings()` for
-   * plain text. Returns `null` on any fetch/parse failure, `[]` if the word
-   * isn't found.
+   * plain text. Falls back to `generateTurkishVariants()` if the exact query
+   * comes up empty (see its doc comment). Returns `null` on any fetch/parse
+   * failure, `[]` if no variant matches either.
    */
   public static async getKubbealti(word: string): Promise<KubbealtiEntry[] | null> {
     if (!word || word.trim() === "") return null;
+
     const data = await this.fetchKubbealtiJson(`/rest/s/${encodeURIComponent(word.trim())}/`);
     if (!data || !Array.isArray(data.content)) return null;
-    return data.content.map((entry: any) => ({ kelime: entry.kelime, anlam: entry.anlam }));
+    if (data.content.length > 0) {
+      return data.content.map((entry: any) => ({ kelime: entry.kelime, anlam: entry.anlam }));
+    }
+
+    for (const variant of this.generateTurkishVariants(word)) {
+      const variantData = await this.fetchKubbealtiJson(`/rest/s/${encodeURIComponent(variant)}/`);
+      if (variantData && Array.isArray(variantData.content) && variantData.content.length > 0) {
+        return variantData.content.map((entry: any) => ({ kelime: entry.kelime, anlam: entry.anlam }));
+      }
+    }
+    return [];
   }
 
   /**
