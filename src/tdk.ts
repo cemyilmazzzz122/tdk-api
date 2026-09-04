@@ -778,6 +778,57 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
   }
 
   /**
+   * Returns the Turkish Wiktionary (`tr.wiktionary.org`) entry for a word,
+   * via MediaWiki's official Action API (`action=query&prop=extracts`) — no
+   * scraping involved, this is a stable, documented public API. `sections`
+   * splits the plain-text extract on its `== Heading ==`/`=== Heading ===`
+   * markers (e.g. "Köken", "Söyleniş", "Ad") for convenience; `raw` has the
+   * unsplit text. Returns `null` if the page doesn't exist or the request
+   * fails.
+   */
+  public static async getWiktionary(word: string): Promise<WiktionaryEntry | null> {
+    if (!word || word.trim() === "") return null;
+    try {
+      const url = `https://tr.wiktionary.org/w/api.php?action=query&prop=extracts&titles=${encodeURIComponent(
+        word.trim()
+      )}&format=json&explaintext=1&formatversion=2`;
+      const response = await fetch(url, { headers: { "User-Agent": "TDK-API-Nodejs-Wrapper/1.0" } });
+      if (!response.ok) return null;
+      const data = await response.json();
+      const page = data?.query?.pages?.[0];
+      if (!page || page.missing || !page.extract) return null;
+
+      const raw: string = page.extract;
+      const sections: Record<string, string> = {};
+      const parts = raw.split(/\n(={2,4})\s*(.+?)\s*\1\n/);
+      // parts[0] is text before the first heading (usually empty); after
+      // that, headings and their following text alternate in triples.
+      for (let i = 1; i < parts.length; i += 3) {
+        const title = parts[i + 1]?.trim();
+        const content = parts[i + 2]?.trim();
+        if (title) sections[title] = content ?? "";
+      }
+      return { raw, sections };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Convenience filter over `getWiktionary()`: returns just one section's
+   * text (e.g. `getWiktionarySection(word, "Köken")` for etymology), matched
+   * case-insensitively. Returns `null` if the word or the section isn't found.
+   */
+  public static async getWiktionarySection(word: string, sectionName: string): Promise<string | null> {
+    const entry = await this.getWiktionary(word);
+    if (!entry) return null;
+    const key = Object.keys(entry.sections).find(
+      (k) => k.toLocaleLowerCase("tr-TR") === sectionName.trim().toLocaleLowerCase("tr-TR")
+    );
+    return key ? entry.sections[key] : null;
+  }
+
+  /**
    * Returns compound words that contain this word.
    */
   public static async getCompoundWords(word: string): Promise<string[]> {
