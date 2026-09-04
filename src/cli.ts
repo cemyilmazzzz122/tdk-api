@@ -4,8 +4,25 @@ import { TDK } from "./tdk";
 const rawArgs = process.argv.slice(2);
 const jsonMode = rawArgs.includes("--json");
 const args = rawArgs.filter((a) => a !== "--json");
-const command = args[0];
-const word = args[1];
+const KNOWN_COMMANDS = new Set([
+  "ara",
+  "anlam",
+  "koken",
+  "ornek",
+  "hece",
+  "uyum",
+  "yazim",
+  "gunun",
+  "rastgele",
+]);
+
+let command = args[0];
+let word = args.slice(1).join(" ");
+
+if (command && !KNOWN_COMMANDS.has(command) && command !== "--help" && command !== "-h") {
+  word = args.join(" ");
+  command = "anlam";
+}
 
 function printResult(data: unknown, formatted: () => void) {
   if (jsonMode) {
@@ -24,10 +41,11 @@ function printError(message: string) {
 }
 
 async function run() {
-  if (!command) {
-    console.log("Kullanım: tdk <komut> <kelime> [--json]");
+  if (!command || command === "--help" || command === "-h") {
+    console.log("Kullanım: tdk [komut] <kelime> [--json]");
     console.log("Komutlar: ara, anlam, koken, ornek, hece, uyum, yazim, gunun, rastgele");
-    process.exit(1);
+    console.log("Not: Komut belirtilmezse doğrudan kelime anlamı aranır (örn: tdk selam)");
+    process.exit(command ? 0 : 1);
   }
 
   TDK.enableCache(false);
