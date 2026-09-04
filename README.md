@@ -34,6 +34,7 @@ tdk kurallar
 tdk kural kısaltmalar
 tdk karsilastir kalem kağıt
 tdk analiz "Bu güzel kalem masanın üstünde duruyor"
+tdk oneri kale
 ```
 
 Herhangi bir komuta `--json` bayrağı eklendiğinde çıktı, insan-okunur metin yerine tek satırlık JSON olarak basılır (script/otomasyon kullanımı için):
@@ -81,7 +82,7 @@ Aşağıdaki metotlar `TDK` sınıfı üzerinden statik olarak erişilebilir dur
 - **`TDK.analyzeText(text)`**: Bir metindeki (Türkçe bağlaçlar/edatlar hariç) her benzersiz kelimeyi tek tek arayıp ilk anlamını ve kökenini döner.
 
 ### 4. Yardımcı Metotlar
-- **`TDK.getSuggestions(prefix)`**: Kelimenin sadece ilk birkaç harfini girdiğinizde otomatik tamamlama önerilerini çeker.
+- **`TDK.getSuggestions(prefix)`**: TDK'nin ~81 bin kelimelik tam madde listesi üzerinden önek bazlı otomatik tamamlama önerileri döner (ilk çağrıda listeyi indirip önbelleğe alır, sonraki çağrılar anlıktır).
 - **`TDK.getAudioUrl(word)`**: TDK'nin bu kelime için gerçekten bir ses kaydı varsa doğrudan indirme URL'sini döner, yoksa `null`. `downloadAudio(word, destPath)` ile cihazınıza indirebilirsiniz.
 - **`TDK.getDailyContent()`**: TDK anasayfasında yer alan "Günün Kelimesi, Atasözü ve Kuralı" içeriklerini çeker.
 - **`TDK.getWordOfTheDay()`**: `getDailyContent()`'in üzerine ince bir katman; günün kelimesini ve tüm anlamlarını `{ word, meanings }` şeklinde döner.
