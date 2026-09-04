@@ -119,24 +119,61 @@ export class TDK {
   }
 
   /**
-   * Returns suggestions (autocomplete) for a given prefix.
+   * `sozluk.gov.tr`'s dedicated `/autocomplete.json` (and `/data/autocomplete.json`)
+   * routes no longer serve JSON — they fall through to the SPA's `index.html`.
+   * The full ~81k-word headword list the site's own autocomplete UI uses is
+   * instead bundled directly into its main JS asset as a
+   * `JSON.parse(\`[{"madde":"..."}]\`)` literal, so this fetches the home
+   * page to find that asset's current hashed filename, downloads it (a few
+   * MB, only once per process), and extracts the literal out of it. Fragile
+   * scraping of an implementation detail — if TDK's build stops embedding
+   * this, this fails closed to `[]` rather than throwing.
+   */
+  private static async fetchAutocompleteData(): Promise<string[]> {
+    try {
+      const homeResponse = await fetch(`${this.BASE_URL}/`, {
+        headers: { "User-Agent": "TDK-API-Nodejs-Wrapper/1.0" },
+      });
+      if (!homeResponse.ok) return [];
+      const html = await homeResponse.text();
+
+      const scriptMatch = html.match(/src="(\/assets\/index-[^"]+\.js)"/);
+      if (!scriptMatch) return [];
+
+      const bundleResponse = await fetch(`${this.BASE_URL}${scriptMatch[1]}`, {
+        headers: { "User-Agent": "TDK-API-Nodejs-Wrapper/1.0" },
+      });
+      if (!bundleResponse.ok) return [];
+      const bundleJs = await bundleResponse.text();
+
+      const startMarker = 'JSON.parse(`[{"madde":';
+      const startIdx = bundleJs.indexOf(startMarker);
+      if (startIdx === -1) return [];
+      const jsonStart = startIdx + "JSON.parse(".length + 1;
+      const jsonEnd = bundleJs.indexOf("`)", jsonStart);
+      if (jsonEnd === -1) return [];
+
+      const data = JSON.parse(bundleJs.slice(jsonStart, jsonEnd)) as { madde: string }[];
+      return data.map((item) => item.madde).filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Returns autocomplete suggestions for a given prefix, searched over TDK's
+   * full headword list (see `fetchAutocompleteData`). The list is fetched
+   * and cached once per process regardless of `enableCache()` — the same
+   * caching behavior as before — and only cleared by `clearCache()`.
    */
   public static async getSuggestions(prefix: string): Promise<string[]> {
+    if (!prefix || prefix.trim() === "") return [];
+
     if (this.autocompleteCache.length === 0) {
-      try {
-        const response = await fetch(`${this.BASE_URL}/autocomplete.json`, {
-          headers: { "User-Agent": "TDK-API-Nodejs-Wrapper/1.0" },
-        });
-        if (response.ok) {
-          const data = await response.json() as { madde: string }[];
-          this.autocompleteCache = data.map(item => item.madde);
-        }
-      } catch (e) {
-        return [];
-      }
+      this.autocompleteCache = await this.fetchAutocompleteData();
     }
-    
-    const cleanPrefix = prefix.toLocaleLowerCase("tr-TR");
+
+    const cleanPrefix = prefix.trim().toLocaleLowerCase("tr-TR");
     return this.autocompleteCache
       .filter(w => w.toLocaleLowerCase("tr-TR").startsWith(cleanPrefix))
       .slice(0, 10);
