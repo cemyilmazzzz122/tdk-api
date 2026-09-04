@@ -427,17 +427,22 @@ export class TDK {
 
   /**
    * Fetches daily content (word of the day, proverbs, rules, etc).
+   * `bypassCache` skips both reading and writing `dailyContentCache` even
+   * when `enableCache(true)` is on — used by `getRule()`'s retry loop, which
+   * needs a fresh random `/icerik` draw on every attempt; without it, once
+   * caching is enabled the loop would just re-read the same cached response
+   * 25 times and could never find a rule outside that first random draw.
    */
-  public static async getDailyContent(): Promise<DailyContent | null> {
-    if (this.isCacheEnabled && this.dailyContentCache) return this.dailyContentCache;
-    
+  public static async getDailyContent(bypassCache = false): Promise<DailyContent | null> {
+    if (!bypassCache && this.isCacheEnabled && this.dailyContentCache) return this.dailyContentCache;
+
     try {
       const response = await fetch(`${this.BASE_URL}/icerik`, {
         headers: { "User-Agent": "TDK-API-Nodejs-Wrapper/1.0" },
       });
       if (response.ok) {
         const data = await response.json() as DailyContent;
-        if (this.isCacheEnabled) this.dailyContentCache = data;
+        if (!bypassCache && this.isCacheEnabled) this.dailyContentCache = data;
         return data;
       }
     } catch {
@@ -480,10 +485,12 @@ export class TDK {
    * `/icerik` daily-content feed, e.g. `{ adi: "Kısaltmalar", url: "https://..." }`.
    * Note: like `getRandomWord()`, this is NOT a fixed catalog — `/icerik`
    * appears to hand back a single randomly-rotated rule per request, so two
-   * calls a second apart can return entirely different rules.
+   * calls a second apart can return entirely different rules. `bypassCache`
+   * (used internally by `getRule()`'s retry loop) forces a fresh `/icerik`
+   * draw even when `enableCache(true)` is on.
    */
-  public static async getKurallar(): Promise<TDKRule[]> {
-    const daily = await this.getDailyContent();
+  public static async getKurallar(bypassCache = false): Promise<TDKRule[]> {
+    const daily = await this.getDailyContent(bypassCache);
     return daily?.kural ?? [];
   }
 
@@ -493,16 +500,19 @@ export class TDK {
    * hands back a single randomly-rotated rule per request (out of a pool of
    * roughly twenty) rather than a fixed catalog, a single `getKurallar()`
    * draw would rarely match a given name — this re-draws (bounded, with a
-   * short delay) until it finds a match or gives up. Returns `null` if no
-   * match turns up within the attempt budget or the matched page can't be
-   * parsed.
+   * short delay) until it finds a match or gives up. Every attempt bypasses
+   * `dailyContentCache` — without that, once `enableCache(true)` is on, all
+   * 25 attempts would just re-read the same cached `/icerik` response and
+   * could never find a rule outside whatever the first draw happened to be.
+   * Returns `null` if no match turns up within the attempt budget or the
+   * matched page can't be parsed.
    */
   public static async getRule(name: string): Promise<string | null> {
     if (!name || name.trim() === "") return null;
     const target = name.trim().toLocaleLowerCase("tr-TR");
 
     for (let attempt = 0; attempt < 25; attempt++) {
-      const rules = await this.getKurallar();
+      const rules = await this.getKurallar(true);
       const match = rules.find((r) => r.adi.toLocaleLowerCase("tr-TR").includes(target));
       if (match) return this.fetchRuleText(match.url);
       await this.delay(100);
