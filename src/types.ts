@@ -87,4 +87,15 @@ export interface SpellCheckResult {
   suggestion?: string;
 }
 
+export interface WordOfTheDay {
+  word: string;
+  meanings: string[];
+}
+
+export interface DailyPick {
+  type: "kelime" | "atasoz";
+  madde: string;
+  anlam: string;
+}
+
 export type TDKResponse = WordInfo[] | { error: string };

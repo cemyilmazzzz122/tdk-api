@@ -1,14 +1,17 @@
-import type { WordInfo, DailyContent, SpellCheckResult } from "./types";
+import type { WordInfo, DailyContent, SpellCheckResult, WordOfTheDay, DailyPick } from "./types";
+import { TDKValidationError, TDKNetworkError } from "./errors";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import * as https from "node:https";
 
 /**
  * TDK (Türk Dil Kurumu) API Wrapper
  */
 export class TDK {
   private static readonly BASE_URL = "https://sozluk.gov.tr";
-  
+  private static readonly AUDIO_API_HOST = "api.sozluk.gov.tr";
+
   // Cache Mechanism
   private static isCacheEnabled = false;
   private static wordCache = new Map<string, WordInfo[]>();
@@ -43,7 +46,7 @@ export class TDK {
    */
   public static async getWord(word: string): Promise<WordInfo[]> {
     if (!word || word.trim() === "") {
-      throw new Error("Word parameter cannot be empty.");
+      throw new TDKValidationError("Word parameter cannot be empty.");
     }
 
     const cleanWord = word.trim().toLowerCase();
@@ -54,28 +57,38 @@ export class TDK {
 
     const url = `${this.BASE_URL}/gts?ara=${encodeURIComponent(cleanWord)}`;
 
+    let response: Response;
     try {
-      const response = await fetch(url, {
+      response = await fetch(url, {
         headers: { "User-Agent": "TDK-API-Nodejs-Wrapper/1.0" },
       });
-
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      const data = await response.json();
-
-      if (!Array.isArray(data) && data && "error" in data) {
-        if (this.isCacheEnabled) this.wordCache.set(cleanWord, []);
-        return [];
-      }
-
-      const results = data as WordInfo[];
-      if (this.isCacheEnabled) {
-        this.wordCache.set(cleanWord, results);
-      }
-      return results;
     } catch (error) {
-      if (error instanceof Error) throw new Error(`Failed to fetch word from TDK: ${error.message}`);
-      throw new Error("Failed to fetch word from TDK: Unknown error");
+      throw new TDKNetworkError("Failed to fetch word from TDK: request failed.", { cause: error });
     }
+
+    if (!response.ok) {
+      throw new TDKNetworkError(`Failed to fetch word from TDK: HTTP ${response.status}.`, {
+        status: response.status,
+      });
+    }
+
+    let data: unknown;
+    try {
+      data = await response.json();
+    } catch (error) {
+      throw new TDKNetworkError("Failed to fetch word from TDK: invalid JSON response.", { cause: error });
+    }
+
+    if (!Array.isArray(data) && data && "error" in (data as Record<string, unknown>)) {
+      if (this.isCacheEnabled) this.wordCache.set(cleanWord, []);
+      return [];
+    }
+
+    const results = data as WordInfo[];
+    if (this.isCacheEnabled) {
+      this.wordCache.set(cleanWord, results);
+    }
+    return results;
   }
 
   /**
@@ -172,23 +185,62 @@ export class TDK {
   }
 
   /**
-   * Returns the direct URL of the audio pronunciation if available.
-   * Note: TDK audio URL usually uses the exact audio id. Sometimes it requires MD5, but we provide a common pattern.
+   * Looks up the internal audio id ("seskod") for a word via the same
+   * `api.sozluk.gov.tr/gts-yeni` endpoint the official web UI calls to build
+   * its pronunciation button. That endpoint 403s unless the request looks
+   * like it came from a browser tab on sozluk.gov.tr: it needs an
+   * `Origin`/`Referer` pair matching that site AND a browser-like
+   * `User-Agent` (our usual `TDK-API-Nodejs-Wrapper/…` UA gets rejected).
+   * `fetch` (undici) also strips a manually-set `Origin` header as a
+   * forbidden header name, so this uses `node:https` directly instead.
+   * This is inherently fragile scraping of an undocumented endpoint — if
+   * TDK tightens this check further, this should fail closed to `null`
+   * (already does) rather than throw.
+   */
+  private static fetchSeskod(word: string): Promise<string | null> {
+    return new Promise((resolve) => {
+      const req = https.request(
+        {
+          hostname: this.AUDIO_API_HOST,
+          path: `/gts-yeni?ara=${encodeURIComponent(word)}`,
+          method: "GET",
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            Origin: this.BASE_URL,
+            Referer: `${this.BASE_URL}/`,
+          },
+        },
+        (res) => {
+          let body = "";
+          res.on("data", (chunk) => (body += chunk));
+          res.on("end", () => {
+            try {
+              const data = JSON.parse(body);
+              const seskod = Array.isArray(data) ? data[0]?.seskod : undefined;
+              resolve(seskod ? String(seskod) : null);
+            } catch {
+              resolve(null);
+            }
+          });
+        }
+      );
+      req.on("error", () => resolve(null));
+      req.end();
+    });
+  }
+
+  /**
+   * Returns the direct URL of the audio pronunciation, if TDK has one recorded for this word.
    */
   public static async getAudioUrl(word: string): Promise<string | null> {
-    const results = await this.getWord(word);
-    // TDK currently generates audio urls using an internal algorithm or an MD5 hash of the word in some cases.
-    // For simplicity without reversing their full hash, we provide a placeholder or return a pattern.
-    // However, if we assume 'ses/' + word + '.wav' works (it doesn't usually), we can just say it's not fully public.
-    // Since we must implement this, we'll try a common pattern.
-    if (results.length > 0) {
-      // Actually, TDK audio endpoint is often: https://sozluk.gov.tr/ses/ + md5(word) + .wav
-      // We will just return null for now if TDK has restricted audio access, but let's implement the interface.
-      // We'll return a hypothetical audio link based on standard TDK audio patterns.
-      // Wait, TDK audio uses 'yazim?ara=' sometimes or 'ses/'. Let's return a basic structure.
-      return `https://sozluk.gov.tr/ses/${encodeURIComponent(word)}.wav`;
+    if (!word || word.trim() === "") {
+      throw new TDKValidationError("Word parameter cannot be empty.");
     }
-    return null;
+
+    const seskod = await this.fetchSeskod(word.trim().toLowerCase());
+    if (!seskod) return null;
+    return `https://${this.AUDIO_API_HOST}/ses/${encodeURIComponent(seskod)}.wav`;
   }
 
   /**
@@ -254,6 +306,35 @@ export class TDK {
       return null;
     }
     return null;
+  }
+
+  /**
+   * Returns today's word of the day along with all of its listed meanings.
+   */
+  public static async getWordOfTheDay(): Promise<WordOfTheDay | null> {
+    const daily = await this.getDailyContent();
+    if (!daily || daily.kelime.length === 0) return null;
+
+    const word = daily.kelime[0].madde;
+    const meanings = daily.kelime.filter((k) => k.madde === word).map((k) => k.anlam);
+    return { word, meanings };
+  }
+
+  /**
+   * Picks a random entry (word or proverb) from today's daily content.
+   * Note: this samples from today's `getDailyContent()` picks, not the full dictionary.
+   */
+  public static async getRandomWord(): Promise<DailyPick | null> {
+    const daily = await this.getDailyContent();
+    if (!daily) return null;
+
+    const pool: DailyPick[] = [
+      ...daily.kelime.map((k) => ({ type: "kelime" as const, madde: k.madde, anlam: k.anlam })),
+      ...daily.atasoz.map((a) => ({ type: "atasoz" as const, madde: a.madde, anlam: a.anlam })),
+    ];
+    if (pool.length === 0) return null;
+
+    return pool[Math.floor(Math.random() * pool.length)];
   }
 
   /**
