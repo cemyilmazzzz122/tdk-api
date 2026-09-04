@@ -22,6 +22,9 @@ const KNOWN_COMMANDS = new Set([
   "karsilastir",
   "analiz",
   "oneri",
+  "kubbealti",
+  "nisanyan",
+  "viki",
 ]);
 
 let command = args[0];
@@ -52,7 +55,7 @@ async function run() {
   if (!command || command === "--help" || command === "-h") {
     console.log("Kullanım: tdk [komut] <kelime> [--json]");
     console.log(
-      "Komutlar: ara, anlam, koken, ornek, hece, uyum, yazim, gunun, rastgele, esanlam, karsit, yabanci, kurallar, kural, karsilastir, analiz, oneri"
+      "Komutlar: ara, anlam, koken, ornek, hece, uyum, yazim, gunun, rastgele, esanlam, karsit, yabanci, kurallar, kural, karsilastir, analiz, oneri, kubbealti, nisanyan, viki"
     );
     console.log("Not: Komut belirtilmezse doğrudan kelime anlamı aranır (örn: tdk selam)");
     process.exit(command ? 0 : 1);
@@ -254,6 +257,43 @@ async function run() {
             console.log("Öneri bulunamadı.");
           } else {
             suggestions.forEach((s, i) => console.log(`${i + 1}. ${s}`));
+          }
+        });
+        break;
+      }
+
+      case "kubbealti": {
+        if (!word) throw new Error("Kelime belirtmelisiniz.");
+        const meanings = await TDK.getKubbealtiMeanings(word);
+        printResult(meanings, () => {
+          if (!meanings) {
+            console.log("Kubbealtı Lugatı'na ulaşılamadı.");
+          } else if (meanings.length === 0) {
+            console.log("Sonuç bulunamadı.");
+          } else {
+            meanings.forEach((m, i) => console.log(`${i + 1}. ${m}`));
+          }
+        });
+        break;
+      }
+
+      case "nisanyan": {
+        if (!word) throw new Error("Kelime belirtmelisiniz.");
+        const origin = await TDK.getNisanyan(word);
+        printResult(origin, () => console.log(origin ?? "Sonuç bulunamadı."));
+        break;
+      }
+
+      case "viki": {
+        if (!word) throw new Error("Kelime belirtmelisiniz.");
+        const entry = await TDK.getWiktionary(word);
+        printResult(entry, () => {
+          if (!entry) {
+            console.log("Sonuç bulunamadı.");
+          } else {
+            for (const [title, content] of Object.entries(entry.sections)) {
+              if (content) console.log(`-- ${title} --\n${content}\n`);
+            }
           }
         });
         break;
