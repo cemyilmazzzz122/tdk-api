@@ -230,6 +230,15 @@ export function getStemCandidates(
     }
   }
 
+  // Bare verb imperative candidates (e.g. "söyle" -> "söylemek", "oku" -> "okumak")
+  const bareInfinitives = restoreInfinitive(normalized);
+  for (const inf of bareInfinitives) {
+    if (!seen.has(inf) && inf !== normalized) {
+      seen.add(inf);
+      candidatesWithWeight.push({ candidate: inf, baseLength: normalized.length });
+    }
+  }
+
   let frontier = [normalized];
 
   for (let depth = 0; depth < maxDepth; depth++) {

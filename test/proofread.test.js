@@ -51,6 +51,34 @@ async function runTests() {
   assert.strictEqual(combo.issues.some((i) => i.type === "question_particle"), true);
   console.log("  ✓ Combined proofread passed.");
 
+  // 5. Şey detachment check (herşey, hersey, birşeyler -> her şey, bir şeyler)
+  console.log("5. Testing -şey detachment...");
+  const s1 = await TDK.proofread("burda herşey yolunda");
+  assert.strictEqual(s1.isCorrect, false);
+  assert.strictEqual(s1.issues.length, 2);
+  assert.strictEqual(s1.issues[0].word, "burda");
+  assert.strictEqual(s1.issues[0].suggestion, "burada");
+  assert.strictEqual(s1.issues[1].word, "herşey");
+  assert.strictEqual(s1.issues[1].suggestion, "her şey");
+
+  const s2 = await TDK.proofread("hersey çok güzel");
+  assert.strictEqual(s2.isCorrect, false);
+  assert.strictEqual(s2.issues[0].word, "hersey");
+  assert.strictEqual(s2.issues[0].suggestion, "her şey");
+  console.log("  ✓ -şey detachment passed.");
+
+  // 6. Erroneously separated compound phrases (hiç bir, bir çok, git gide)
+  console.log("6. Testing compound phrases...");
+  const p1 = await TDK.proofread("hiç bir şey bilmiyor");
+  assert.strictEqual(p1.isCorrect, false);
+  assert.strictEqual(p1.issues[0].word, "hiç bir");
+  assert.strictEqual(p1.issues[0].suggestion, "hiçbir");
+
+  const p2 = await TDK.proofread("yada gelme");
+  assert.strictEqual(p2.isCorrect, false);
+  assert.strictEqual(p2.issues[0].suggestion, "ya da");
+  console.log("  ✓ Compound phrases passed.");
+
   console.log("\n All proofread tests passed successfully!");
 }
 

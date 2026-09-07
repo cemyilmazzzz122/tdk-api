@@ -26,6 +26,168 @@ import * as https from "node:https";
 import * as tls from "node:tls";
 
 /**
+ * Known frequent Turkish misspellings, erroneously joined compound words,
+ * and words where vowel dropping is prohibited by TDK (Yazım Kılavuzu).
+ */
+export const COMMON_MISSPELLINGS: Record<string, string> = {
+  // -şey ile biten ve ayrı yazılması zorunlu söz öbekleri
+  herşey: "her şey",
+  hersey: "her şey",
+  birşey: "bir şey",
+  birsey: "bir şey",
+  hiçbirşey: "hiçbir şey",
+  hicbirsey: "hiçbir şey",
+  çokşey: "çok şey",
+  coksey: "çok şey",
+  şeyler: "şeyler",
+  seyler: "şeyler",
+  herhangibirşey: "herhangi bir şey",
+  herhangibirsey: "herhangi bir şey",
+
+  // Sıkça birleşik yazılan ama ayrı yazılması gereken sözler
+  hergün: "her gün",
+  hergun: "her gün",
+  herzaman: "her zaman",
+  heran: "her an",
+  heryer: "her yer",
+  herbiri: "her biri",
+  pekçok: "pek çok",
+  pekcok: "pek çok",
+  pekaz: "pek az",
+  yada: "ya da",
+  tabiki: "tabii ki",
+  tabiiki: "tabii ki",
+  sağol: "sağ ol",
+  sagol: "sağ ol",
+  sağolun: "sağ olun",
+  sagolun: "sağ olun",
+  hoşçakal: "hoşça kal",
+  hoscakal: "hoşça kal",
+  hoşgeldin: "hoş geldin",
+  hosgeldin: "hoş geldin",
+  hoşgeldiniz: "hoş geldiniz",
+  hosgeldiniz: "hoş geldiniz",
+  hoşbulduk: "hoş bulduk",
+  hosbulduk: "hoş bulduk",
+  yanısıra: "yanı sıra",
+  yanisira: "yanı sıra",
+  peşisıra: "peşi sıra",
+  pesisira: "peşi sıra",
+  ardısıra: "ardı sıra",
+  ardisira: "ardı sıra",
+  artarda: "art arda",
+  yüzyüze: "yüz yüze",
+  yuzyuze: "yüz yüze",
+  elele: "el ele",
+  gözgöze: "göz göze",
+  başbaşa: "baş başa",
+  basbasa: "baş başa",
+  yanyana: "yan yana",
+  içiçe: "iç içe",
+  icice: "iç içe",
+  üstüste: "üst üste",
+  ustuste: "üst üste",
+  altalta: "alt alta",
+  önsöz: "ön söz",
+  onsoz: "ön söz",
+  önyargı: "ön yargı",
+  onyargi: "ön yargı",
+  farketmek: "fark etmek",
+  farketti: "fark etti",
+  farkettim: "fark ettim",
+  farkeder: "fark eder",
+  farketmez: "fark etmez",
+  terketmek: "terk etmek",
+  terketti: "terk etti",
+  ayırdetmek: "ayırt etmek",
+  ayırtetmek: "ayırt etmek",
+  arzetmek: "arz etmek",
+  arzederim: "arz ederim",
+  varolmak: "var olmak",
+  yokolmak: "yok olmak",
+  haketmek: "hak etmek",
+  haketti: "hak etti",
+  hakkaten: "hakikaten",
+  hiçkimse: "hiç kimse",
+  hickimse: "hiç kimse",
+
+  // Ünlü düşmesi yapılmaması gereken yer bildiren sözler (TDK Kural 15)
+  burda: "burada",
+  burdan: "buradan",
+  şurda: "şurada",
+  surda: "şurada",
+  şurdan: "şuradan",
+  surdan: "şuradan",
+  orda: "orada",
+  ordan: "oradan",
+  içerde: "içeride",
+  icerde: "içeride",
+  içerden: "içeriden",
+  icerden: "içeriden",
+  dışarda: "dışarıda",
+  disarda: "dışarıda",
+  dışardan: "dışarıdan",
+  disardan: "dışarıdan",
+  yukarda: "yukarıda",
+  yukardan: "yukarıdan",
+
+  // Sıkça yanlış yazılan sözcükler
+  herkez: "herkes",
+  yanlız: "yalnız",
+  yalnış: "yanlış",
+  orjinal: "orijinal",
+  labaratuar: "laboratuvar",
+  laboratuar: "laboratuvar",
+  şöför: "şoför",
+  sofor: "şoför",
+  egzos: "egzoz",
+  eksoz: "egzoz",
+  ekzoz: "egzoz",
+  kiprik: "kirpik",
+  kirbit: "kibrit",
+  klavuz: "kılavuz",
+  kıravat: "kravat",
+  süpriz: "sürpriz",
+  supriz: "sürpriz",
+  raslantı: "rastlantı",
+  hastahane: "hastane",
+  pastahane: "pastane",
+  postahane: "postane",
+  eczahane: "eczane",
+  meyva: "meyve",
+  sarmısak: "sarımsak",
+  dinazor: "dinozor",
+  pantalon: "pantolon",
+  tesbih: "tespih",
+  ahçı: "aşçı",
+  matba: "matbaa",
+  idda: "iddia",
+  iddaa: "iddia",
+  muhattap: "muhatap",
+  traş: "tıraş",
+  karnıbahar: "karnabahar",
+  kareografi: "koreografi",
+  poaça: "poğaça",
+  pohaça: "poğaça",
+  şarz: "şarj",
+  sarj: "şarj",
+  makina: "makine",
+  müsade: "müsaade",
+  entellektüel: "entelektüel",
+  inisiyatif: "inisiyatif",
+  insiyatif: "inisiyatif",
+  sezeryan: "sezaryen",
+  doküman: "doküman",
+  döküman: "doküman",
+  erozyon: "erozyon",
+  erizyon: "erozyon",
+  anane: "anneanne",
+  babaanne: "babaanne",
+};
+
+export const SEY_EXCEPTIONS = new Set(["düşey", "eşey", "konsey", "jersey", "şey"]);
+
+/**
  * TDK (Türk Dil Kurumu) API Wrapper
  */
 export class TDK {
@@ -630,32 +792,56 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
    * Checks spelling and returns suggestions if wrong.
    */
   public static async checkSpelling(word: string): Promise<SpellCheckResult> {
-    // 1. Check if word exists
+    if (!word || word.trim() === "") {
+      return { isCorrect: false, word };
+    }
+
+    const cleanWord = word.trim().toLocaleLowerCase("tr-TR");
+
+    // 1. Check if word exists in TDK dictionary
     const results = await this.getWord(word);
     if (results.length > 0) {
       return { isCorrect: true, word };
     }
 
-    // 2. If not, check "sıkça yapılan yanlışlar" from DailyContent — an exact
-    // match here is TDK explicitly saying "X is often confused with Y", so
-    // it's authoritative when it hits (but only 2-3 rotating entries per call).
+    // 2. Common Turkish misspellings, erroneously joined compounds, and vowel drop errors
+    if (COMMON_MISSPELLINGS[cleanWord]) {
+      return { isCorrect: false, word, suggestion: COMMON_MISSPELLINGS[cleanWord] };
+    }
+
+    // 3. Dynamic -şey / -sey attached check:
+    // In Turkish, 'şey' is an indefinite pronoun and is ALWAYS written separately from the preceding word
+    // (e.g. her şey, bir şey, hiçbir şey, çok şey, her şeyi, bir şeyler).
+    const seyMatch = cleanWord.match(/^(.+?)(?:şey|sey)([ıiuaeüodekmnl]+)?$/);
+    if (seyMatch && !SEY_EXCEPTIONS.has(cleanWord)) {
+      let prefix = seyMatch[1];
+      const suffix = seyMatch[2] || "";
+      if (prefix === "hicbir") prefix = "hiçbir";
+      if (prefix === "cok") prefix = "çok";
+      return {
+        isCorrect: false,
+        word,
+        suggestion: `${prefix} şey${suffix}`,
+      };
+    }
+
+    // 4. "Sıkça yapılan yanlışlar" from DailyContent
     const daily = await this.getDailyContent();
     if (daily) {
-      const syydMatch = daily.syyd.find(s => s.yanliskelime.toLocaleLowerCase("tr-TR") === word.toLocaleLowerCase("tr-TR"));
+      const syydMatch = daily.syyd.find((s) => s.yanliskelime.toLocaleLowerCase("tr-TR") === cleanWord);
       if (syydMatch) {
         return { isCorrect: false, word, suggestion: syydMatch.dogrukelime };
       }
-      const mixMatch = daily.karistirma.find(s => s.yanlis.toLocaleLowerCase("tr-TR") === word.toLocaleLowerCase("tr-TR"));
+      const mixMatch = daily.karistirma.find((s) => s.yanlis.toLocaleLowerCase("tr-TR") === cleanWord);
       if (mixMatch) {
         return { isCorrect: false, word, suggestion: mixMatch.dogru };
       }
     }
 
-    // 3. Morphology Fallback: Check if the word is an inflected form of a known headword
-    // (e.g., "halılarımızın" -> "halı", "kitabımız" -> "kitap", "çocuğa" -> "çocuk")
+    // 5. Morphology Fallback: Check if the word is an inflected form or bare verb imperative of a known headword
+    // (e.g., "halılarımızın" -> "halı", "kitabımız" -> "kitap", "çocuğa" -> "çocuk", "söyle" -> "söylemek")
     const root = await this.findRoot(word);
     if (root) {
-      const cleanWord = word.trim().toLocaleLowerCase("tr-TR");
       const isInflected = root !== cleanWord;
       return {
         isCorrect: true,
@@ -665,42 +851,44 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
       };
     }
 
-    // 4. No exact match or morphology root: fall back to the closest
-    // headword (by edit distance) across TDK's full ~81k-word list (the same
-    // data `getSuggestions()` uses). Restricted to single-token, lowercase
-    // headwords so it doesn't suggest compounds/phrases or proper nouns.
-    // Candidates whose length differs too much are skipped before running
-    // the O(n*m) distance calculation, both for speed and because a huge
-    // length gap can't be within the distance threshold anyway. Ties (same
-    // distance) prefer a matching first letter, then a matching length —
-    // typos rarely change the first letter, and this avoids picking
-    // whatever happens to sort alphabetically first. There's no word
-    // frequency data available, so a genuine tie can still land on a
-    // technically-correct but less commonly intended word.
+    // 6. Check if headwords with spaces match when space is removed (e.g. "ön yargı" for "önyargı")
     if (this.autocompleteCache.length === 0) {
       this.autocompleteCache = await this.fetchAutocompleteData();
     }
-    const cleanWord = word.trim().toLocaleLowerCase("tr-TR");
-    let best: { candidate: string; distance: number; firstMismatch: number; lengthMismatch: number } | null = null;
+    for (const candidate of this.autocompleteCache) {
+      if (candidate.includes(" ")) {
+        const candidateNoSpace = candidate.replace(/\s+/g, "").toLocaleLowerCase("tr-TR");
+        if (candidateNoSpace === cleanWord) {
+          return { isCorrect: false, word, suggestion: candidate };
+        }
+      }
+    }
+
+    // 7. No exact match or morphology root: fall back to closest headword by edit distance.
+    // Ties prefer matching first letter, and initial character mismatches are penalized
+    // so irrelevant foreign loanwords (like 'jersey') do not beat Turkish roots.
+    let best: { candidate: string; distance: number; rawDist: number; firstMismatch: number; lengthMismatch: number } | null = null;
     for (const candidate of this.autocompleteCache) {
       if (candidate.includes(" ") || candidate !== candidate.toLocaleLowerCase("tr-TR")) continue;
       if (Math.abs(candidate.length - cleanWord.length) > 2) continue;
 
-      const distance = this.damerauLevenshtein(cleanWord, candidate);
-      if (distance === 0) continue;
+      const rawDist = this.damerauLevenshtein(cleanWord, candidate);
+      if (rawDist === 0) continue;
 
       const firstMismatch = candidate[0] === cleanWord[0] ? 0 : 1;
       const lengthMismatch = candidate.length === cleanWord.length ? 0 : 1;
+      const distance = rawDist + (firstMismatch > 0 ? 1.2 : 0);
+
       const better =
         !best ||
         distance < best.distance ||
         (distance === best.distance && firstMismatch < best.firstMismatch) ||
         (distance === best.distance && firstMismatch === best.firstMismatch && lengthMismatch < best.lengthMismatch);
       if (better) {
-        best = { candidate, distance, firstMismatch, lengthMismatch };
+        best = { candidate, distance, rawDist, firstMismatch, lengthMismatch };
       }
     }
-    if (best && best.distance <= 2) {
+    if (best && best.rawDist <= 2 && (best.firstMismatch === 0 || best.rawDist <= 1)) {
       return { isCorrect: false, word, suggestion: best.candidate };
     }
     return { isCorrect: false, word };
@@ -1477,6 +1665,81 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
       "sanki", "oysaki", "mademki", "belki", "halbuki", "çünkü", "meğerki", "illaki"
     ]);
 
+    // 1. Detect multi-word phrases that should be written as single compound words
+    const PHRASE_MISTAKES: {
+      regex: RegExp;
+      suggestion: string;
+      message: string;
+      type: ProofreadIssue["type"];
+    }[] = [
+      {
+        regex: /\bhiç\s+bir\b/gi,
+        suggestion: "hiçbir",
+        message: "'hiçbir' belgisiz sıfatı bitişik yazılmalıdır.",
+        type: "spelling",
+      },
+      {
+        regex: /\bbir\s+çok\b/gi,
+        suggestion: "birçok",
+        message: "'birçok' belgisiz sıfatı/zamiri bitişik yazılmalıdır.",
+        type: "spelling",
+      },
+      {
+        regex: /\bbir\s+kaç\b/gi,
+        suggestion: "birkaç",
+        message: "'birkaç' belgisiz sıfatı/zamiri bitişik yazılmalıdır.",
+        type: "spelling",
+      },
+      {
+        regex: /\bbir\s+az\b/gi,
+        suggestion: "biraz",
+        message: "'biraz' sözcüğü bitişik yazılmalıdır.",
+        type: "spelling",
+      },
+      {
+        regex: /\bher\s+hangi\b/gi,
+        suggestion: "herhangi",
+        message: "'herhangi' sözcüğü bitişik yazılmalıdır.",
+        type: "spelling",
+      },
+      {
+        regex: /\bgit\s+gide\b/gi,
+        suggestion: "gitgide",
+        message: "'gitgide' zarfı bitişik yazılmalıdır.",
+        type: "spelling",
+      },
+      {
+        regex: /\bbirden\s+bire\b/gi,
+        suggestion: "birdenbire",
+        message: "'birdenbire' zarfı bitişik yazılmalıdır.",
+        type: "spelling",
+      },
+      {
+        regex: /\brast\s+gele\b/gi,
+        suggestion: "rastgele",
+        message: "'rastgele' zarfı bitişik yazılmalıdır.",
+        type: "spelling",
+      },
+    ];
+
+    const coveredRanges: { start: number; end: number }[] = [];
+    for (const pm of PHRASE_MISTAKES) {
+      let pmMatch: RegExpExecArray | null;
+      while ((pmMatch = pm.regex.exec(text)) !== null) {
+        const start = pmMatch.index;
+        const end = start + pmMatch[0].length;
+        coveredRanges.push({ start, end });
+        issues.push({
+          type: pm.type,
+          word: pmMatch[0],
+          startIndex: start,
+          endIndex: end,
+          suggestion: pm.suggestion,
+          message: pm.message,
+        });
+      }
+    }
+
     const tokenRegex = /[\p{L}0-9'’]+/gu;
     let match: RegExpExecArray | null;
 
@@ -1487,6 +1750,7 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
       const lower = rawWord.toLocaleLowerCase("tr-TR");
 
       if (/^\d+$/.test(lower)) continue;
+      if (coveredRanges.some((r) => startIndex >= r.start && endIndex <= r.end)) continue;
 
       let flagged = false;
 
@@ -1520,12 +1784,8 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
           if (!(await this.isHeadword(lower))) {
             const root = await this.findRoot(base);
             const isVerb =
-              (root && (root.endsWith("mek") || root.endsWith("mak"))) ||
-              base === "demek" ||
-              base === "kaldı" ||
-              base === "yeter" ||
-              base === "bilmem" ||
-              VERB_CONJUGATION_REGEX.test(base);
+              (base === "demek" || base === "kaldı" || base === "yeter" || base === "bilmem" || VERB_CONJUGATION_REGEX.test(base)) &&
+              (root ? root.endsWith("mek") || root.endsWith("mak") : true);
 
             if (isVerb) {
               issues.push({
@@ -1549,8 +1809,8 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
         if (!(await this.isHeadword(lower))) {
           const root = await this.findRoot(base);
           const isVerb =
-            (root && (root.endsWith("mek") || root.endsWith("mak"))) ||
-            VERB_CONJUGATION_REGEX.test(base);
+            VERB_CONJUGATION_REGEX.test(base) &&
+            (root ? root.endsWith("mek") || root.endsWith("mak") : false);
 
           if (isVerb) {
             const correctEnding = ending.startsWith("t") ? (ending === "te" ? "de" : "da") : ending;
@@ -1567,7 +1827,52 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
         }
       }
 
-      // 4. General Spell Check
+      // 4. Check -şey / -sey erroneously attached to preceding word
+      const seyMatch = lower.match(/^(.+?)(?:şey|sey)([ıiuaeüodekmnl]+)?$/);
+      if (!flagged && seyMatch && !SEY_EXCEPTIONS.has(lower)) {
+        let prefix = seyMatch[1];
+        const suffix = seyMatch[2] || "";
+        if (prefix === "hicbir") prefix = "hiçbir";
+        if (prefix === "cok") prefix = "çok";
+        issues.push({
+          type: "spelling",
+          word: rawWord,
+          startIndex,
+          endIndex,
+          suggestion: `${prefix} şey${suffix}`,
+          message: "'şey' sözcüğü kendinden önceki kelimeden ayrı yazılmalıdır.",
+        });
+        flagged = true;
+      }
+
+      // 5. Check 'yada' conjunction mistake
+      if (!flagged && lower === "yada") {
+        issues.push({
+          type: "spelling",
+          word: rawWord,
+          startIndex,
+          endIndex,
+          suggestion: "ya da",
+          message: "'ya da' bağlacı her zaman ayrı yazılır.",
+        });
+        flagged = true;
+      }
+
+      // 6. Check common vowel drop mistakes: burda, şurda, orda, vb. (TDK Kural 15)
+      if (!flagged && (lower === "burda" || lower === "şurda" || lower === "surda" || lower === "orda" || lower === "içerde" || lower === "icerde" || lower === "dışarda" || lower === "disarda" || lower === "yukarda")) {
+        const correct = COMMON_MISSPELLINGS[lower] || lower;
+        issues.push({
+          type: "spelling",
+          word: rawWord,
+          startIndex,
+          endIndex,
+          suggestion: correct,
+          message: `'${rawWord}' sözcüğünde ünlü düşmesi yapılmaz.`,
+        });
+        flagged = true;
+      }
+
+      // 7. General Spell Check
       if (!flagged) {
         const check = await this.checkSpelling(rawWord);
         if (!check.isCorrect) {
@@ -1578,12 +1883,14 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
             endIndex,
             suggestion: check.suggestion,
             message: check.suggestion
-              ? `'${rawWord}' yanlış yazılmış olabilir. Öneri: '${check.suggestion}'`
+              ? `'${rawWord}' yanlış yazılmış olabilir.`
               : `'${rawWord}' sözlükte bulunamadı.`,
           });
         }
       }
     }
+
+    issues.sort((a, b) => a.startIndex - b.startIndex);
 
     return {
       text,

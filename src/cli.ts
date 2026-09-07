@@ -154,7 +154,7 @@ async function run() {
   }
 
   if (command === "--version" || command === "-v") {
-    console.log("tdk-api-wrapper v1.5.0");
+    console.log("tdk-api-wrapper v1.5.1");
     process.exit(0);
   }
 
