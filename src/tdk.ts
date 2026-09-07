@@ -1372,8 +1372,9 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
 
   /**
    * Finds headwords in TDK that can be formed from the given letters (anagrams).
-   * If `exactLength: true` (default), only anagrams with the exact same length and character frequency are returned.
-   * If `exactLength: false`, sub-anagrams (valid words using a subset of the letters) are also included.
+   * If exact-length anagrams exist, they are returned.
+   * If none exist (or exactLength is false), valid sub-anagrams (words using a subset of the letters,
+   * minimum 3 letters) are returned, sorted by length descending.
    */
   public static async findAnagrams(letters: string, options?: AnagramOptions): Promise<string[]> {
     if (!letters || letters.trim() === "") return [];
@@ -1382,7 +1383,7 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
     const clean = letters.trim().toLocaleLowerCase("tr-TR").replace(/[^a-zçğıöşüâîû]/gi, "");
     if (clean.length === 0) return [];
 
-    const exact = options?.exactLength !== false;
+    const forceExact = options?.exactLength === true;
     const max = options?.maxResults ?? 50;
 
     const getFrequency = (str: string): Record<string, number> => {
@@ -1394,14 +1395,13 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
     };
 
     const targetFreq = getFrequency(clean);
-    const results: string[] = [];
+    const exactMatches: string[] = [];
+    const subMatches: string[] = [];
 
     for (const headword of this.autocompleteCache) {
       const lower = headword.toLocaleLowerCase("tr-TR");
       if (lower.includes(" ") || lower.includes("-")) continue;
-
-      if (exact && lower.length !== clean.length) continue;
-      if (!exact && lower.length > clean.length) continue;
+      if (lower.length > clean.length || lower.length < 3) continue;
 
       const wordFreq = getFrequency(lower);
       let isValid = true;
@@ -1413,12 +1413,20 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
       }
 
       if (isValid && lower !== clean) {
-        results.push(headword);
-        if (results.length >= max) break;
+        if (lower.length === clean.length) {
+          exactMatches.push(headword);
+        } else {
+          subMatches.push(headword);
+        }
       }
     }
 
-    return results;
+    if (exactMatches.length > 0 || forceExact) {
+      return exactMatches.slice(0, max);
+    }
+
+    subMatches.sort((a, b) => b.length - a.length || a.localeCompare(b, "tr-TR"));
+    return subMatches.slice(0, max);
   }
 
   /**

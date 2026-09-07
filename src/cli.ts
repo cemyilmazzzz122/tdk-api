@@ -427,10 +427,15 @@ async function run() {
         const anagrams = await TDK.findAnagrams(word);
         printResult(anagrams, () => {
           if (anagrams.length === 0) {
-            console.log("Anagram bulunamadı.");
+            console.log("Anagram veya bu harflerle türetilebilecek kelime bulunamadı.");
           } else {
-            console.log(c.bold(`Anagramlar (${anagrams.length}):`));
-            anagrams.forEach((a, i) => console.log(`${i + 1}. ${c.green(a)}`));
+            const clean = word.trim().toLocaleLowerCase("tr-TR").replace(/[^a-zçğıöşüâîû]/gi, "");
+            const hasExact = anagrams.some((a) => a.length === clean.length);
+            const title = hasExact
+              ? `Anagramlar (${anagrams.length}):`
+              : `Birebir anagram bulunamadı. Bu harflerle türetilen kelimeler (${anagrams.length}):`;
+            console.log(c.bold(title));
+            anagrams.forEach((a, i) => console.log(`${i + 1}. ${c.green(a)} ${c.dim(`(${a.length} harf)`)}`));
           }
         });
         break;
