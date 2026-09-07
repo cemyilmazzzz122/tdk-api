@@ -67,7 +67,8 @@ export const TURKISH_SUFFIXES: readonly string[] = [
   "miş", "mış", "muş", "müş", "dim", "dım", "dum", "düm", "tim", "tım", "tum", "tüm",
   "din", "dın", "dun", "dün", "tin", "tın", "tun", "tün", "dik", "dık", "duk", "dük",
   "tik", "tık", "tuk", "tük", "ydi", "ydı", "ydu", "ydü", "yim", "yım", "yum", "yüm",
-  "sin", "sın", "sun", "sün", "siz", "sız", "suz", "süz", "lik", "lık", "luk", "lük",
+  "sin", "sın", "sun", "sün", "sen", "san", "sem", "sam", "sek", "sak",
+  "siz", "sız", "suz", "süz", "lik", "lık", "luk", "lük",
   "ici", "ıcı", "ucu", "ücü", "gen", "gan", "ken", "kan",
   "len", "lan", "leş", "laş", "mek", "mak", "yor",
   // 2-letter suffixes
@@ -123,6 +124,61 @@ export function restoreVowelDrop(stem: string): string[] {
       return [stem.slice(0, -1) + inserted + c2];
     }
   }
+  return [];
+}
+
+/**
+ * Reverses Turkish consonant gemination (ünsüz türemesi / ikizleşmesi):
+ * In words of Arabic/foreign origin, when receiving a vowel-initial suffix, the final consonant doubles:
+ * e.g. hak->hakkı, his->hissi, sır->sırrı, af->affı, ret->reddi, tıp->tıbbı, zam->zammı, hat->hattı.
+ * Restores the single consonant form and checks consonant softening on the result (e.g. redd -> red -> ret).
+ */
+export function restoreGemination(stem: string): string[] {
+  if (stem.length < 3) return [];
+  const c1 = stem[stem.length - 2];
+  const c2 = stem[stem.length - 1];
+  if (c1 === c2 && !isVowel(c1)) {
+    const single = stem.slice(0, -1);
+    const hardened = restoreConsonantSoftening(single);
+    return [single, ...hardened];
+  }
+  return [];
+}
+
+/**
+ * Reverses Turkish vowel narrowing (ünlü daralması):
+ * Verbs ending in wide vowels 'a' or 'e' narrow to 'ı', 'i', 'u', 'ü' before the continuous tense suffix -yor:
+ * e.g. başla-yor -> başlıyor, bekle-yor -> bekliyor, özle-yor -> özlüyor, anla-yor -> anlıyor.
+ * Also handles irregular monosyllabic verbs: de-yor -> diyor, ye-yor -> yiyor.
+ */
+export function restoreVowelNarrowing(stem: string): string[] {
+  if (stem.length < 2) return [];
+
+  // Irregular monosyllabic verbs
+  if (stem === "di") return ["de"];
+  if (stem === "yi") return ["ye"];
+
+  const lastChar = stem[stem.length - 1];
+  const isLastNarrow = "ıiuü".includes(lastChar);
+
+  // Case 1: stem ends with narrow vowel (e.g. başlı, bekli, özlü, kutlu)
+  if (isLastNarrow) {
+    const vowelsInBase = stem.slice(0, -1).split("").filter(isVowel);
+    const lastVowel = vowelsInBase.length > 0 ? vowelsInBase[vowelsInBase.length - 1] : lastChar;
+    const widened = "aıou".includes(lastVowel) ? "a" : "e";
+    return [stem.slice(0, -1) + widened];
+  }
+
+  // Case 2: stem ends with consonant (e.g. başlıyor stripped by -ıyor -> stem: başl)
+  if (!isVowel(lastChar)) {
+    const vowelsInBase = stem.split("").filter(isVowel);
+    if (vowelsInBase.length > 0) {
+      const lastVowel = vowelsInBase[vowelsInBase.length - 1];
+      const widened = "aıou".includes(lastVowel) ? "a" : "e";
+      return [stem + widened];
+    }
+  }
+
   return [];
 }
 
@@ -186,17 +242,71 @@ export function getStemCandidates(
 
           const hardened = restoreConsonantSoftening(stem);
           const vowelDropped = restoreVowelDrop(stem);
-          // Infinitives only apply to direct stems or consonant-hardened stems (e.g. gid -> git -> gitmek),
-          // NOT to vowel-dropped nouns (nouns like akıl/omuz/şehir don't take infinitive -mek/-mak).
-          const verbalBases = [stem, ...hardened];
+          const geminated = restoreGemination(stem);
+
+          // Vowel narrowing (ünlü daralması) in Turkish strictly occurs with continuous tense (-yor)
+          // or with the monosyllabic verbs de-/ye- before buffer 'y' (diye, yiyen).
+          // Restricting narrowing to these suffixes prevents false-positive stems on other suffixes.
+          const isNarrowingSuffix =
+            suffix.startsWith("yor") ||
+            suffix.includes("iyor") ||
+            suffix.includes("ıyor") ||
+            suffix.includes("uyor") ||
+            suffix.includes("üyor");
+
+          const isDeYeBuffer = (stem === "di" || stem === "yi") && suffix.startsWith("y");
+          const narrowed = isNarrowingSuffix || isDeYeBuffer ? restoreVowelNarrowing(stem) : [];
+
+          // Suffix indicator for verbs: -yor, -ecek, -miş, -di, etc.
+          const isVerbSuffix =
+            isNarrowingSuffix ||
+            suffix.includes("ecek") ||
+            suffix.includes("acak") ||
+            suffix.includes("miş") ||
+            suffix.includes("mış") ||
+            suffix.includes("müş") ||
+            suffix.includes("muş") ||
+            suffix.includes("mek") ||
+            suffix.includes("mak") ||
+            suffix.includes("erek") ||
+            suffix.includes("arak") ||
+            suffix.includes("dik") ||
+            suffix.includes("dık") ||
+            suffix.includes("duk") ||
+            suffix.includes("dük") ||
+            suffix.includes("tik") ||
+            suffix.includes("tık") ||
+            suffix.includes("tuk") ||
+            suffix.includes("tük") ||
+            suffix.includes("sen") ||
+            suffix.includes("san") ||
+            suffix.includes("sem") ||
+            suffix.includes("sam") ||
+            suffix.includes("sek") ||
+            suffix.includes("sak");
+
+          // Infinitives apply to direct stems, hardened stems, and widened stems (e.g. başlı -> başla -> başlamak)
+          const verbalBases = [stem, ...hardened, ...narrowed];
           const infinitives = verbalBases.flatMap((v) => restoreInfinitive(v));
-          const variants = [stem, ...hardened, ...vowelDropped, ...infinitives];
+
+          // Base candidates
+          const variants = [stem, ...hardened, ...vowelDropped, ...geminated, ...narrowed];
 
           for (const variant of variants) {
             if (!seen.has(variant) && variant !== normalized) {
               seen.add(variant);
               nextFrontier.push(variant);
               candidatesWithWeight.push({ candidate: variant, baseLength: stem.length });
+            }
+          }
+
+          // Push infinitives with high priority if a verbal suffix matched, preventing noun false-positives
+          for (const inf of infinitives) {
+            if (!seen.has(inf) && inf !== normalized) {
+              seen.add(inf);
+              nextFrontier.push(inf);
+              const weight = isVerbSuffix ? stem.length + 5 : stem.length;
+              candidatesWithWeight.push({ candidate: inf, baseLength: weight });
             }
           }
         }

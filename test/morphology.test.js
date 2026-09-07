@@ -1,5 +1,13 @@
 const assert = require("node:assert");
-const { TDK, getStemCandidates, restoreConsonantSoftening, restoreVowelDrop, restoreInfinitive } = require("../dist/index.js");
+const {
+  TDK,
+  getStemCandidates,
+  restoreConsonantSoftening,
+  restoreVowelDrop,
+  restoreInfinitive,
+  restoreGemination,
+  restoreVowelNarrowing,
+} = require("../dist/index.js");
 
 async function runTests() {
   console.log("=== Running Morphology Unit & Integration Tests ===");
@@ -16,6 +24,14 @@ async function runTests() {
   assert.deepStrictEqual(restoreVowelDrop("omz"), ["omuz"]);
   assert.deepStrictEqual(restoreInfinitive("oku"), ["okumak"]);
   assert.deepStrictEqual(restoreInfinitive("gel"), ["gelmek"]);
+  assert.deepStrictEqual(restoreGemination("hakk"), ["hak"]);
+  assert.deepStrictEqual(restoreGemination("hiss"), ["his"]);
+  assert.deepStrictEqual(restoreGemination("redd"), ["red", "ret"]);
+  assert.deepStrictEqual(restoreGemination("aff"), ["af"]);
+  assert.deepStrictEqual(restoreVowelNarrowing("başlı"), ["başla"]);
+  assert.deepStrictEqual(restoreVowelNarrowing("bekli"), ["bekle"]);
+  assert.deepStrictEqual(restoreVowelNarrowing("di"), ["de"]);
+  assert.deepStrictEqual(restoreVowelNarrowing("yi"), ["ye"]);
   console.log("  ✓ Phonology helpers passed.");
 
   // 2. Candidate generation
@@ -61,6 +77,9 @@ async function runTests() {
   assert.strictEqual(await TDK.findRoot("okuyoruz"), "okumak");
   assert.strictEqual(await TDK.findRoot("çocukların"), "çocuk");
   assert.strictEqual(await TDK.findRoot("kitap"), "kitap");
+  assert.strictEqual(await TDK.findRoot("hakkımızda"), "hak");
+  assert.strictEqual(await TDK.findRoot("başlıyor"), "başlamak");
+  assert.strictEqual(await TDK.findRoot("diyor"), "demek");
   console.log("  ✓ TDK.findRoot passed.");
 
   // 5. TDK.stem
@@ -74,6 +93,11 @@ async function runTests() {
   assert(stem2 !== null);
   assert.strictEqual(stem2.root, "kitap");
   assert.strictEqual(stem2.isInflected, false);
+
+  const stem3 = await TDK.stem("hakkımızda");
+  assert(stem3 !== null);
+  assert.strictEqual(stem3.root, "hak");
+  assert.strictEqual(stem3.isInflected, true);
   console.log("  ✓ TDK.stem passed.");
 
   // 6. TDK.checkSpelling with morphology fallback
