@@ -10,6 +10,12 @@ import type {
   TDKRule,
   KubbealtiEntry,
   WiktionaryEntry,
+  ProofreadIssue,
+  ProofreadResult,
+  PatternSearchOptions,
+  AnagramOptions,
+  RhymeOptions,
+  TDKConfig,
 } from "./types";
 import { TDKValidationError, TDKNetworkError } from "./errors";
 import { getStemCandidates } from "./morphology";
@@ -104,6 +110,11 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
 -----END CERTIFICATE-----`,
   ];
 
+  // Configuration
+  private static defaultTimeoutMs = 8000;
+  private static defaultRetries = 1;
+  private static maxCacheSize = 1000;
+
   // Cache Mechanism
   private static isCacheEnabled = false;
   private static wordCache = new Map<string, WordInfo[]>();
@@ -111,6 +122,16 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
   private static autocompleteCache: string[] = [];
   private static autocompleteSet: Set<string> = new Set<string>();
   private static stemCache = new Map<string, string | null>();
+
+  /**
+   * Configures global client options such as network timeout, retries, and cache size.
+   */
+  public static configure(config: TDKConfig): void {
+    if (config.timeoutMs !== undefined) this.defaultTimeoutMs = Math.max(100, config.timeoutMs);
+    if (config.retries !== undefined) this.defaultRetries = Math.max(0, config.retries);
+    if (config.cache !== undefined) this.enableCache(config.cache);
+    if (config.maxCacheSize !== undefined) this.maxCacheSize = Math.max(10, config.maxCacheSize);
+  }
 
   /**
    * Enables or disables in-memory caching for API requests.
@@ -133,8 +154,56 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
     this.stemCache.clear();
   }
 
+  private static setBoundedCache<K, V>(map: Map<K, V>, key: K, value: V): void {
+    if (map.size >= this.maxCacheSize) {
+      const firstKey = map.keys().next().value;
+      if (firstKey !== undefined) map.delete(firstKey);
+    }
+    map.set(key, value);
+  }
+
   private static delay(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Internal helper that performs HTTP fetch with timeout and automatic retry on network/5xx errors.
+   */
+  private static async fetchWithRetry(
+    url: string,
+    options: RequestInit = {},
+    retries: number = this.defaultRetries,
+    timeoutMs: number = this.defaultTimeoutMs
+  ): Promise<Response> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const signal = AbortSignal.timeout(timeoutMs);
+        const headers = {
+          "User-Agent": "TDK-API-Nodejs-Wrapper/1.0",
+          ...((options.headers as Record<string, string>) || {}),
+        };
+        const res = await fetch(url, { ...options, headers, signal });
+        if (res.ok || (res.status >= 400 && res.status < 500)) {
+          return res;
+        }
+        // If 5xx server error, retry
+        if (attempt < retries) {
+          await this.delay(200 * (attempt + 1));
+          continue;
+        }
+        return res;
+      } catch (err) {
+        lastError = err;
+        if (attempt < retries) {
+          await this.delay(200 * (attempt + 1));
+          continue;
+        }
+      }
+    }
+    throw new TDKNetworkError(`Request to ${url} failed after ${retries + 1} attempts.`, {
+      cause: lastError,
+    });
   }
 
   /**
@@ -155,9 +224,7 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
 
     let response: Response;
     try {
-      response = await fetch(url, {
-        headers: { "User-Agent": "TDK-API-Nodejs-Wrapper/1.0" },
-      });
+      response = await this.fetchWithRetry(url);
     } catch (error) {
       throw new TDKNetworkError("Failed to fetch word from TDK: request failed.", { cause: error });
     }
@@ -176,13 +243,13 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
     }
 
     if (!Array.isArray(data) && data && "error" in (data as Record<string, unknown>)) {
-      if (this.isCacheEnabled) this.wordCache.set(cleanWord, []);
+      if (this.isCacheEnabled) this.setBoundedCache(this.wordCache, cleanWord, []);
       return [];
     }
 
     const results = data as WordInfo[];
     if (this.isCacheEnabled) {
-      this.wordCache.set(cleanWord, results);
+      this.setBoundedCache(this.wordCache, cleanWord, results);
     }
     return results;
   }
@@ -320,7 +387,7 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
 
     // 1. If the word itself is an exact headword, it is its own root
     if (await this.isHeadword(clean)) {
-      this.stemCache.set(clean, clean);
+      this.setBoundedCache(this.stemCache, clean, clean);
       return clean;
     }
 
@@ -328,12 +395,12 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
     const candidates = getStemCandidates(clean);
     for (const candidate of candidates) {
       if (await this.isHeadword(candidate)) {
-        this.stemCache.set(clean, candidate);
+        this.setBoundedCache(this.stemCache, clean, candidate);
         return candidate;
       }
     }
 
-    this.stemCache.set(clean, null);
+    this.setBoundedCache(this.stemCache, clean, null);
     return null;
   }
 
@@ -1063,6 +1130,7 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
         origin: originA,
         syllables: this.syllabicate(a),
         harmony: this.checkVowelHarmony(a),
+        labialHarmony: this.checkLabialHarmony(a),
       },
       b: {
         word: b,
@@ -1070,6 +1138,7 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
         origin: originB,
         syllables: this.syllabicate(b),
         harmony: this.checkVowelHarmony(b),
+        labialHarmony: this.checkLabialHarmony(b),
       },
     };
   }
@@ -1181,13 +1250,15 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
 
   /**
    * Syllabicates a Turkish word based on general grammar rules.
+   * Handles syllable separation for vowels, single consonants, double consonants,
+   * and western loanword three-consonant clusters (e.g. e-lek-trik, kon-trol, or-kes-tra).
    */
   public static syllabicate(word: string): string[] {
     const vowels = /[aeıioöuüAEIİOÖUÜ]/;
+    const ONSET_CLUSTERS = new Set(["tr", "pr", "kr", "gr", "br", "fr", "dr", "pl", "kl", "fl", "bl", "gl"]);
     const result: string[] = [];
     let currentSyllable = "";
     
-    // Better basic syllabification: 
     // Go from right to left.
     for (let i = word.length - 1; i >= 0; i--) {
       currentSyllable = word[i] + currentSyllable;
@@ -1200,9 +1271,14 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
             currentSyllable = word[i - 1] + currentSyllable;
             i--; // skip the consonant
           } else if (i - 2 >= 0 && !vowels.test(word[i - 2])) {
-            // two consonants before this vowel. The one right before belongs to this syllable
-            currentSyllable = word[i - 1] + currentSyllable;
-            i--;
+            // Two consonants before this vowel. Check if three consonants exist and end in an onset cluster
+            if (i - 3 >= 0 && !vowels.test(word[i - 3]) && ONSET_CLUSTERS.has((word[i - 2] + word[i - 1]).toLowerCase())) {
+              currentSyllable = word[i - 2] + word[i - 1] + currentSyllable;
+              i -= 2;
+            } else {
+              currentSyllable = word[i - 1] + currentSyllable;
+              i--;
+            }
           }
         }
         result.unshift(currentSyllable);
@@ -1236,4 +1312,336 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
     // If it has both front and back vowels, it breaks harmony.
     return !(hasBack && hasFront);
   }
+
+  /**
+   * Checks if a word follows Turkish Minor Vowel Harmony (Küçük Ünlü Uyumu / Labial Harmony).
+   * Rules:
+   * 1. After an unrounded vowel (a, e, ı, i), only unrounded vowels (a, e, ı, i) can follow.
+   * 2. After a rounded vowel (o, ö, u, ü), either an unrounded wide (a, e) or rounded narrow (u, ü) vowel can follow.
+   * Single-syllable words and words with <=1 vowel are considered compliant by convention.
+   */
+  public static checkLabialHarmony(word: string): boolean {
+    const lower = word.toLocaleLowerCase("tr-TR");
+    const vowels = lower.split("").filter((ch) => "aeıioöuü".includes(ch));
+    if (vowels.length <= 1) return true;
+
+    for (let i = 0; i < vowels.length - 1; i++) {
+      const v1 = vowels[i];
+      const v2 = vowels[i + 1];
+
+      if ("aeıi".includes(v1)) {
+        if (!"aeıi".includes(v2)) return false;
+      } else if ("oöuü".includes(v1)) {
+        if (!"aeuü".includes(v2)) return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Searches TDK headwords using a wildcard / pattern string.
+   * Wildcards:
+   *   '_' or '?' matches any single character
+   *   '*' matches zero or more characters
+   * Example: "k_l_m" matches "kalem", "kelam", "kilim".
+   * Runs in-memory against TDK's 81k headword list.
+   */
+  public static async patternSearch(pattern: string, options?: PatternSearchOptions): Promise<string[]> {
+    if (!pattern || pattern.trim() === "") return [];
+    await this.ensureAutocompleteLoaded();
+
+    const cleanPattern = pattern.trim().toLocaleLowerCase("tr-TR");
+    const escaped = cleanPattern
+      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      .replace(/[_?]/g, "[\\p{L}]")
+      .replace(/\*/g, "[\\p{L}]*");
+    const regex = new RegExp(`^${escaped}$`, "u");
+
+    const max = options?.maxResults ?? 50;
+    const matches: string[] = [];
+
+    for (const headword of this.autocompleteCache) {
+      const lower = headword.toLocaleLowerCase("tr-TR");
+      if (regex.test(lower)) {
+        matches.push(headword);
+        if (matches.length >= max) break;
+      }
+    }
+    return matches;
+  }
+
+  /**
+   * Finds headwords in TDK that can be formed from the given letters (anagrams).
+   * If `exactLength: true` (default), only anagrams with the exact same length and character frequency are returned.
+   * If `exactLength: false`, sub-anagrams (valid words using a subset of the letters) are also included.
+   */
+  public static async findAnagrams(letters: string, options?: AnagramOptions): Promise<string[]> {
+    if (!letters || letters.trim() === "") return [];
+    await this.ensureAutocompleteLoaded();
+
+    const clean = letters.trim().toLocaleLowerCase("tr-TR").replace(/[^a-zçğıöşüâîû]/gi, "");
+    if (clean.length === 0) return [];
+
+    const exact = options?.exactLength !== false;
+    const max = options?.maxResults ?? 50;
+
+    const getFrequency = (str: string): Record<string, number> => {
+      const freq: Record<string, number> = {};
+      for (const ch of str) {
+        freq[ch] = (freq[ch] || 0) + 1;
+      }
+      return freq;
+    };
+
+    const targetFreq = getFrequency(clean);
+    const results: string[] = [];
+
+    for (const headword of this.autocompleteCache) {
+      const lower = headword.toLocaleLowerCase("tr-TR");
+      if (lower.includes(" ") || lower.includes("-")) continue;
+
+      if (exact && lower.length !== clean.length) continue;
+      if (!exact && lower.length > clean.length) continue;
+
+      const wordFreq = getFrequency(lower);
+      let isValid = true;
+      for (const [ch, count] of Object.entries(wordFreq)) {
+        if (!targetFreq[ch] || targetFreq[ch] < count) {
+          isValid = false;
+          break;
+        }
+      }
+
+      if (isValid && lower !== clean) {
+        results.push(headword);
+        if (results.length >= max) break;
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Finds words in TDK that rhyme with the given word (sharing the same ending suffix/letters).
+   * @param word The target word
+   * @param options.minLetters Minimum number of ending characters that must match (default: 3)
+   * @param options.maxResults Maximum number of rhyme results to return (default: 50)
+   */
+  public static async findRhymes(word: string, options?: RhymeOptions): Promise<string[]> {
+    if (!word || word.trim() === "") return [];
+    await this.ensureAutocompleteLoaded();
+
+    const clean = word.trim().toLocaleLowerCase("tr-TR");
+    const minLetters = Math.min(options?.minLetters ?? 3, clean.length);
+    const max = options?.maxResults ?? 50;
+
+    const suffix = clean.slice(-minLetters);
+    const results: string[] = [];
+
+    for (const headword of this.autocompleteCache) {
+      const lower = headword.toLocaleLowerCase("tr-TR");
+      if (lower !== clean && lower.endsWith(suffix) && !lower.includes(" ")) {
+        results.push(headword);
+        if (results.length >= max) break;
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Performs comprehensive spelling, grammar, and syntax proofreading on a Turkish text.
+   * Detects:
+   * 1. Conjunction 'da/de' erroneously joined to verbs or words (e.g. "gitsende" -> "gitsen de")
+   * 2. Conjunction 'ki' erroneously joined to verbs (e.g. "gördümki" -> "gördüm ki"), respecting SOMBAHÇEMİ exceptions
+   * 3. Question particle 'mi/mı/mu/mü' erroneously joined to words (e.g. "geldimi" -> "geldi mi")
+   * 4. Misspelled words with dictionary suggestions (via edit-distance & morphology)
+   */
+  public static async proofread(text: string): Promise<ProofreadResult> {
+    if (!text || text.trim() === "") {
+      return { text: text || "", issues: [], isCorrect: true };
+    }
+
+    await this.ensureAutocompleteLoaded();
+    const issues: ProofreadIssue[] = [];
+
+    const SOMBAHCEMI = new Set([
+      "sanki", "oysaki", "mademki", "belki", "halbuki", "çünkü", "meğerki", "illaki"
+    ]);
+
+    const tokenRegex = /[\p{L}0-9'’]+/gu;
+    let match: RegExpExecArray | null;
+
+    while ((match = tokenRegex.exec(text)) !== null) {
+      const rawWord = match[0];
+      const startIndex = match.index;
+      const endIndex = startIndex + rawWord.length;
+      const lower = rawWord.toLocaleLowerCase("tr-TR");
+
+      if (/^\d+$/.test(lower)) continue;
+
+      let flagged = false;
+
+      // 1. Check Question Particle (mı, mi, mu, mü) erroneously attached
+      const questionMatch = lower.match(/^(.+?)(m[ıiuü](?:sin|sın|sun|sün|siniz|sınız|sunuz|sünüz|yiz|yız|yuz|yüz|m|k)?)$/);
+      if (questionMatch) {
+        const base = questionMatch[1];
+        const particle = questionMatch[2];
+        if (base.length >= 2 && (await this.isHeadword(base) || (await this.findRoot(base)) !== null)) {
+          if (!(await this.isHeadword(lower))) {
+            issues.push({
+              type: "question_particle",
+              word: rawWord,
+              startIndex,
+              endIndex,
+              suggestion: `${base} ${particle}`,
+              message: `'${particle}' soru eki kendinden önceki kelimeden ayrı yazılmalıdır.`,
+            });
+            flagged = true;
+          }
+        }
+      }
+
+      const VERB_CONJUGATION_REGEX =
+        /(?:d[ıiuü][kmmn]?|t[ıiuü][kmmn]?|d[ıiuü]n[ıiuü]z?|t[ıiuü]n[ıiuü]z?|m[ıiuü]ş(?:[szn][ıiuü]z?|lar)?|yor(?:um|sun|uz|lar)?|ecek(?:sin|iz|ler)?|acak(?:sın|ız|lar)?|s[ae][mnk]|s[ae]n[ıiz]?|meli|malı|me[mz]|ma[mz])$/i;
+
+      // 2. Check Conjunction 'ki' erroneously attached to verbs
+      if (!flagged && lower.endsWith("ki") && lower.length > 3) {
+        const base = lower.slice(0, -2);
+        if (!SOMBAHCEMI.has(lower)) {
+          if (!(await this.isHeadword(lower))) {
+            const root = await this.findRoot(base);
+            const isVerb =
+              (root && (root.endsWith("mek") || root.endsWith("mak"))) ||
+              base === "demek" ||
+              base === "kaldı" ||
+              base === "yeter" ||
+              base === "bilmem" ||
+              VERB_CONJUGATION_REGEX.test(base);
+
+            if (isVerb) {
+              issues.push({
+                type: "conjunction_ki",
+                word: rawWord,
+                startIndex,
+                endIndex,
+                suggestion: `${base} ki`,
+                message: `'ki' bağlacı ayrı yazılmalıdır.`,
+              });
+              flagged = true;
+            }
+          }
+        }
+      }
+
+      // 3. Check Conjunction 'da/de/ta/te' erroneously attached to verbs
+      if (!flagged && (lower.endsWith("de") || lower.endsWith("da") || lower.endsWith("te") || lower.endsWith("ta")) && lower.length > 3) {
+        const base = lower.slice(0, -2);
+        const ending = lower.slice(-2);
+        if (!(await this.isHeadword(lower))) {
+          const root = await this.findRoot(base);
+          const isVerb =
+            (root && (root.endsWith("mek") || root.endsWith("mak"))) ||
+            VERB_CONJUGATION_REGEX.test(base);
+
+          if (isVerb) {
+            const correctEnding = ending.startsWith("t") ? (ending === "te" ? "de" : "da") : ending;
+            issues.push({
+              type: "conjunction_da",
+              word: rawWord,
+              startIndex,
+              endIndex,
+              suggestion: `${base} ${correctEnding}`,
+              message: `'da/de' bağlacı fiillerden sonra her zaman ayrı yazılır (bağlaç olan da/de sertleşmez).`,
+            });
+            flagged = true;
+          }
+        }
+      }
+
+      // 4. General Spell Check
+      if (!flagged) {
+        const check = await this.checkSpelling(rawWord);
+        if (!check.isCorrect) {
+          issues.push({
+            type: "spelling",
+            word: rawWord,
+            startIndex,
+            endIndex,
+            suggestion: check.suggestion,
+            message: check.suggestion
+              ? `'${rawWord}' yanlış yazılmış olabilir. Öneri: '${check.suggestion}'`
+              : `'${rawWord}' sözlükte bulunamadı.`,
+          });
+        }
+      }
+    }
+
+    return {
+      text,
+      issues,
+      isCorrect: issues.length === 0,
+    };
+  }
 }
+
+/**
+ * Configurable instance-based client for TDK API.
+ * Useful for multi-tenant applications or backend services requiring isolated configurations.
+ */
+export class TDKClient {
+  constructor(config?: TDKConfig) {
+    if (config) {
+      TDK.configure(config);
+    }
+  }
+
+  public getWord(word: string): Promise<WordInfo[]> {
+    return TDK.getWord(word);
+  }
+
+  public getMeanings(word: string): Promise<string[]> {
+    return TDK.getMeanings(word);
+  }
+
+  public checkSpelling(word: string): Promise<SpellCheckResult> {
+    return TDK.checkSpelling(word);
+  }
+
+  public findRoot(word: string): Promise<string | null> {
+    return TDK.findRoot(word);
+  }
+
+  public stem(word: string): Promise<StemResult | null> {
+    return TDK.stem(word);
+  }
+
+  public proofread(text: string): Promise<ProofreadResult> {
+    return TDK.proofread(text);
+  }
+
+  public patternSearch(pattern: string, options?: PatternSearchOptions): Promise<string[]> {
+    return TDK.patternSearch(pattern, options);
+  }
+
+  public findAnagrams(letters: string, options?: AnagramOptions): Promise<string[]> {
+    return TDK.findAnagrams(letters, options);
+  }
+
+  public findRhymes(word: string, options?: RhymeOptions): Promise<string[]> {
+    return TDK.findRhymes(word, options);
+  }
+
+  public syllabicate(word: string): string[] {
+    return TDK.syllabicate(word);
+  }
+
+  public checkVowelHarmony(word: string): boolean {
+    return TDK.checkVowelHarmony(word);
+  }
+
+  public checkLabialHarmony(word: string): boolean {
+    return TDK.checkLabialHarmony(word);
+  }
+}
+

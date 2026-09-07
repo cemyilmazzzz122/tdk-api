@@ -118,6 +118,7 @@ export interface WordComparisonSide {
   origin: string | null;
   syllables: string[];
   harmony: boolean;
+  labialHarmony?: boolean;
 }
 
 export interface WordComparison {
@@ -134,6 +135,42 @@ export interface WordAnalysis {
   isInflected?: boolean;
 }
 
+export interface ProofreadIssue {
+  type: "spelling" | "conjunction_da" | "conjunction_ki" | "question_particle";
+  word: string;
+  startIndex: number;
+  endIndex: number;
+  suggestion?: string;
+  message: string;
+}
+
+export interface ProofreadResult {
+  text: string;
+  issues: ProofreadIssue[];
+  isCorrect: boolean;
+}
+
+export interface PatternSearchOptions {
+  maxResults?: number;
+}
+
+export interface AnagramOptions {
+  exactLength?: boolean;
+  maxResults?: number;
+}
+
+export interface RhymeOptions {
+  minLetters?: number;
+  maxResults?: number;
+}
+
+export interface TDKConfig {
+  timeoutMs?: number;
+  retries?: number;
+  cache?: boolean;
+  maxCacheSize?: number;
+}
+
 export interface KubbealtiEntry {
   kelime: string;
   anlam: string;
@@ -145,3 +182,4 @@ export interface WiktionaryEntry {
 }
 
 export type TDKResponse = WordInfo[] | { error: string };
+
