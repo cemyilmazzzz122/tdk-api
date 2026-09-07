@@ -4,6 +4,17 @@ import { TDK } from "./tdk";
 const rawArgs = process.argv.slice(2);
 const jsonMode = rawArgs.includes("--json");
 const args = rawArgs.filter((a) => a !== "--json");
+
+const isColor = !jsonMode && Boolean(process.stdout.isTTY);
+const c = {
+  bold: (s: string) => (isColor ? `\x1b[1m${s}\x1b[0m` : s),
+  dim: (s: string) => (isColor ? `\x1b[2m${s}\x1b[0m` : s),
+  green: (s: string) => (isColor ? `\x1b[32m${s}\x1b[0m` : s),
+  yellow: (s: string) => (isColor ? `\x1b[33m${s}\x1b[0m` : s),
+  cyan: (s: string) => (isColor ? `\x1b[36m${s}\x1b[0m` : s),
+  red: (s: string) => (isColor ? `\x1b[31m${s}\x1b[0m` : s),
+};
+
 const KNOWN_COMMANDS = new Set([
   "ara",
   "anlam",
@@ -11,6 +22,7 @@ const KNOWN_COMMANDS = new Set([
   "ornek",
   "hece",
   "uyum",
+  "kucukuyum",
   "yazim",
   "kok",
   "stem",
@@ -25,6 +37,14 @@ const KNOWN_COMMANDS = new Set([
   "karsilastir",
   "analiz",
   "oneri",
+  "bulmaca",
+  "pattern",
+  "anagram",
+  "kafiye",
+  "rhyme",
+  "denetle",
+  "proofread",
+  "repl",
   "kubbealti",
   "nisanyan",
   "viki",
@@ -50,18 +70,96 @@ function printError(message: string) {
   if (jsonMode) {
     console.log(JSON.stringify({ error: message }));
   } else {
-    console.log(`Hata: ${message}`);
+    console.log(c.red(`Hata: ${message}`));
   }
 }
 
+async function startRepl() {
+  const readline = await import("node:readline");
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    prompt: c.cyan("tdk> "),
+  });
+
+  console.log(c.bold("TDK İnteraktif Sözlük Kabuğu (Çıkmak için 'exit' veya Ctrl+C)"));
+  console.log(c.dim("Komutlar: ara <kelime>, hece <kelime>, bulmaca <desen>, denetle <metin> veya doğrudan kelime"));
+  rl.prompt();
+
+  rl.on("line", async (line) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      rl.prompt();
+      return;
+    }
+    if (trimmed === "exit" || trimmed === "quit" || trimmed === ".exit") {
+      rl.close();
+      return;
+    }
+
+    const parts = trimmed.split(/\s+/);
+    let subCmd = parts[0].toLowerCase();
+    let subArg = parts.slice(1).join(" ");
+    if (!KNOWN_COMMANDS.has(subCmd)) {
+      subArg = trimmed;
+      subCmd = "anlam";
+    }
+
+    try {
+      if (subCmd === "ara" || subCmd === "anlam") {
+        const meanings = await TDK.getMeanings(subArg);
+        if (meanings.length === 0) console.log(c.dim("Sonuç bulunamadı."));
+        else meanings.forEach((m, i) => console.log(`${i + 1}. ${c.green(m)}`));
+      } else if (subCmd === "koken") {
+        const origin = await TDK.getOrigin(subArg);
+        console.log(`Köken: ${c.cyan(origin || "Bilinmiyor")}`);
+      } else if (subCmd === "hece") {
+        const s = TDK.syllabicate(subArg);
+        console.log(`Heceler: ${c.yellow(s.join("-"))}`);
+      } else if (subCmd === "uyum") {
+        const h = TDK.checkVowelHarmony(subArg);
+        console.log(`Büyük Ünlü Uyumu: ${h ? c.green("Uyar") : c.red("Uymaz")}`);
+      } else if (subCmd === "kucukuyum") {
+        const h = TDK.checkLabialHarmony(subArg);
+        console.log(`Küçük Ünlü Uyumu: ${h ? c.green("Uyar") : c.red("Uymaz")}`);
+      } else if (subCmd === "bulmaca" || subCmd === "pattern") {
+        const matches = await TDK.patternSearch(subArg);
+        console.log(matches.slice(0, 15).join(", "));
+      } else if (subCmd === "denetle" || subCmd === "proofread") {
+        const res = await TDK.proofread(subArg);
+        if (res.isCorrect) console.log(c.green("✓ Sorun bulunamadı."));
+        else res.issues.forEach((iss) => console.log(`- ${c.yellow(iss.word)}: ${iss.message}${iss.suggestion ? " -> " + c.green(iss.suggestion) : ""}`));
+      } else {
+        console.log(c.dim("Örnek komutlar: 'ara kalem', 'hece elektrik', 'bulmaca k_l_m', 'denetle Bugün evdeyim'"));
+      }
+    } catch (e: any) {
+      console.log(c.red(`Hata: ${e?.message || e}`));
+    }
+    rl.prompt();
+  });
+}
+
 async function run() {
-  if (!command || command === "--help" || command === "-h") {
+  if (!command) {
+    if (process.stdin.isTTY) {
+      await startRepl();
+      return;
+    }
     console.log("Kullanım: tdk [komut] <kelime> [--json]");
     console.log(
-      "Komutlar: ara, anlam, koken, ornek, hece, uyum, yazim, kok, deyim, gunun, rastgele, esanlam, karsit, yabanci, kurallar, kural, karsilastir, analiz, oneri, kubbealti, nisanyan, viki"
+      "Komutlar: ara, anlam, koken, ornek, hece, uyum, kucukuyum, yazim, kok, deyim, gunun, rastgele, esanlam, karsit, yabanci, kurallar, kural, karsilastir, analiz, oneri, bulmaca, anagram, kafiye, denetle, repl, kubbealti, nisanyan, viki"
     );
     console.log("Not: Komut belirtilmezse doğrudan kelime anlamı aranır (örn: tdk selam)");
-    process.exit(command ? 0 : 1);
+    process.exit(1);
+  }
+
+  if (command === "--help" || command === "-h") {
+    console.log("Kullanım: tdk [komut] <kelime> [--json]");
+    console.log(
+      "Komutlar: ara, anlam, koken, ornek, hece, uyum, kucukuyum, yazim, kok, deyim, gunun, rastgele, esanlam, karsit, yabanci, kurallar, kural, karsilastir, analiz, oneri, bulmaca, anagram, kafiye, denetle, repl, kubbealti, nisanyan, viki"
+    );
+    console.log("Not: Komut belirtilmezse doğrudan kelime anlamı aranır (örn: tdk selam)");
+    process.exit(0);
   }
 
   TDK.enableCache(false);
@@ -117,6 +215,16 @@ async function run() {
         const isHarmony = TDK.checkVowelHarmony(word);
         printResult({ word, harmony: isHarmony }, () =>
           console.log(`Büyük Ünlü Uyumu: ${isHarmony ? "Uyar" : "Uymaz"}`)
+        );
+        break;
+      }
+
+      case "kucukuyum":
+      case "labial": {
+        if (!word) throw new Error("Kelime belirtmelisiniz.");
+        const isHarmony = TDK.checkLabialHarmony(word);
+        printResult({ word, labialHarmony: isHarmony }, () =>
+          console.log(`Küçük Ünlü Uyumu: ${isHarmony ? "Uyar" : "Uymaz"}`)
         );
         break;
       }
@@ -296,6 +404,74 @@ async function run() {
             suggestions.forEach((s, i) => console.log(`${i + 1}. ${s}`));
           }
         });
+        break;
+      }
+
+      case "bulmaca":
+      case "pattern": {
+        if (!word) throw new Error("Desen belirtmelisiniz (örn: k_l_m).");
+        const matches = await TDK.patternSearch(word);
+        printResult(matches, () => {
+          if (matches.length === 0) {
+            console.log("Eşleşen kelime bulunamadı.");
+          } else {
+            console.log(c.bold(`Bulunan Kelimeler (${matches.length}):`));
+            matches.forEach((m, i) => console.log(`${i + 1}. ${c.cyan(m)}`));
+          }
+        });
+        break;
+      }
+
+      case "anagram": {
+        if (!word) throw new Error("Harfler belirtmelisiniz.");
+        const anagrams = await TDK.findAnagrams(word);
+        printResult(anagrams, () => {
+          if (anagrams.length === 0) {
+            console.log("Anagram bulunamadı.");
+          } else {
+            console.log(c.bold(`Anagramlar (${anagrams.length}):`));
+            anagrams.forEach((a, i) => console.log(`${i + 1}. ${c.green(a)}`));
+          }
+        });
+        break;
+      }
+
+      case "kafiye":
+      case "rhyme": {
+        if (!word) throw new Error("Kelime belirtmelisiniz.");
+        const rhymes = await TDK.findRhymes(word);
+        printResult(rhymes, () => {
+          if (rhymes.length === 0) {
+            console.log("Kafiye bulunamadı.");
+          } else {
+            console.log(c.bold(`Kafiyeli Kelimeler (${rhymes.length}):`));
+            rhymes.forEach((r, i) => console.log(`${i + 1}. ${c.yellow(r)}`));
+          }
+        });
+        break;
+      }
+
+      case "denetle":
+      case "proofread": {
+        if (!word) throw new Error("Metin belirtmelisiniz.");
+        const result = await TDK.proofread(word);
+        printResult(result, () => {
+          if (result.isCorrect) {
+            console.log(c.green("✓ Metinde imla veya bağlaç hatası tespit edilmedi."));
+          } else {
+            console.log(c.bold(c.red(`Metinde ${result.issues.length} olası sorun tespit edildi:`)));
+            result.issues.forEach((issue, i) => {
+              const label = c.yellow(`[${issue.type}]`);
+              const sug = issue.suggestion ? c.green(` -> Öneri: ${issue.suggestion}`) : "";
+              console.log(`${i + 1}. ${label} "${c.bold(issue.word)}": ${issue.message}${sug}`);
+            });
+          }
+        });
+        break;
+      }
+
+      case "repl": {
+        await startRepl();
         break;
       }
 
