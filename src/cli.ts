@@ -53,7 +53,7 @@ const KNOWN_COMMANDS = new Set([
 let command = args[0];
 let word = args.slice(1).join(" ");
 
-if (command && !KNOWN_COMMANDS.has(command) && command !== "--help" && command !== "-h") {
+if (command && !KNOWN_COMMANDS.has(command) && command !== "--help" && command !== "-h" && command !== "--version" && command !== "-v") {
   word = args.join(" ");
   command = "anlam";
 }
@@ -151,6 +151,11 @@ async function run() {
     );
     console.log("Not: Komut belirtilmezse doğrudan kelime anlamı aranır (örn: tdk selam)");
     process.exit(1);
+  }
+
+  if (command === "--version" || command === "-v") {
+    console.log("tdk-api-wrapper v1.5.0");
+    process.exit(0);
   }
 
   if (command === "--help" || command === "-h") {
