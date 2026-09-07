@@ -12,6 +12,9 @@ const KNOWN_COMMANDS = new Set([
   "hece",
   "uyum",
   "yazim",
+  "kok",
+  "stem",
+  "deyim",
   "gunun",
   "rastgele",
   "esanlam",
@@ -55,7 +58,7 @@ async function run() {
   if (!command || command === "--help" || command === "-h") {
     console.log("Kullanım: tdk [komut] <kelime> [--json]");
     console.log(
-      "Komutlar: ara, anlam, koken, ornek, hece, uyum, yazim, gunun, rastgele, esanlam, karsit, yabanci, kurallar, kural, karsilastir, analiz, oneri, kubbealti, nisanyan, viki"
+      "Komutlar: ara, anlam, koken, ornek, hece, uyum, yazim, kok, deyim, gunun, rastgele, esanlam, karsit, yabanci, kurallar, kural, karsilastir, analiz, oneri, kubbealti, nisanyan, viki"
     );
     console.log("Not: Komut belirtilmezse doğrudan kelime anlamı aranır (örn: tdk selam)");
     process.exit(command ? 0 : 1);
@@ -123,9 +126,42 @@ async function run() {
         const spellResult = await TDK.checkSpelling(word);
         printResult(spellResult, () => {
           if (spellResult.isCorrect) {
-            console.log("Doğru yazım.");
+            if (spellResult.isInflected && spellResult.root) {
+              console.log(`Doğru yazım (çekimli biçim, kök: ${spellResult.root}).`);
+            } else {
+              console.log("Doğru yazım.");
+            }
           } else {
             console.log(`Yanlış yazım.${spellResult.suggestion ? " Doğrusu: " + spellResult.suggestion : ""}`);
+          }
+        });
+        break;
+      }
+
+      case "kok":
+      case "stem": {
+        if (!word) throw new Error("Kelime belirtmelisiniz.");
+        const stemResult = await TDK.stem(word);
+        printResult(stemResult, () => {
+          if (!stemResult) {
+            console.log("Kök bulunamadı.");
+          } else if (stemResult.isInflected) {
+            console.log(`Kök: ${stemResult.root} (çekimli biçim)`);
+          } else {
+            console.log(`Kök: ${stemResult.root} (yalın biçim)`);
+          }
+        });
+        break;
+      }
+
+      case "deyim": {
+        if (!word) throw new Error("Kelime belirtmelisiniz.");
+        const proverbs = await TDK.getProverbs(word);
+        printResult(proverbs, () => {
+          if (proverbs.length === 0) {
+            console.log("Atasözü/deyim bulunamadı.");
+          } else {
+            proverbs.forEach((p, i) => console.log(`${i + 1}. ${p}`));
           }
         });
         break;
@@ -239,7 +275,8 @@ async function run() {
           } else {
             analysis.forEach((a) => {
               if (a.found) {
-                console.log(`${a.word}: ${a.meaning ?? "-"} (${a.origin})`);
+                const rootLabel = a.isInflected && a.root ? ` (kök: ${a.root})` : "";
+                console.log(`${a.word}${rootLabel}: ${a.meaning ?? "-"} (${a.origin})`);
               } else {
                 console.log(`${a.word}: bulunamadı`);
               }

@@ -85,6 +85,15 @@ export interface SpellCheckResult {
   isCorrect: boolean;
   word: string;
   suggestion?: string;
+  isInflected?: boolean;
+  root?: string;
+}
+
+export interface StemResult {
+  word: string;
+  root: string;
+  isInflected: boolean;
+  candidates?: string[];
 }
 
 export interface WordOfTheDay {
@@ -121,6 +130,8 @@ export interface WordAnalysis {
   found: boolean;
   meaning: string | null;
   origin: string | null;
+  root?: string;
+  isInflected?: boolean;
 }
 
 export interface KubbealtiEntry {
