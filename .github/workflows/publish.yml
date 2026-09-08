@@ -39,3 +39,20 @@ jobs:
         run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Trigger downstream deploy (tdk-sozluk)
+        if: steps.version-check.outputs.changed == 'true'
+        env:
+          DISPATCH_TOKEN: ${{ secrets.DOWNSTREAM_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$DISPATCH_TOKEN" ]; then
+            echo "DOWNSTREAM_DISPATCH_TOKEN not set; skipping instant trigger."
+            echo "The tdk-sozluk repo polls npm every 15 minutes as a fallback."
+            exit 0
+          fi
+          sleep 30
+          curl -sSf -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $DISPATCH_TOKEN" \
+            https://api.github.com/repos/fork-flow/tdk-sozluk/dispatches \
+            -d '{"event_type":"tdk-api-published"}'
