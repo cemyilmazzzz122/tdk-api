@@ -118,6 +118,17 @@ async function runTests() {
 
   const sp4 = await TDK.checkSpelling("asdfxyz12345");
   assert.strictEqual(sp4.isCorrect, false);
+
+  // Keyboard-aware ranking: "swlam" -> "selam" because w and e are horizontal
+  // neighbours on a Turkish Q keyboard (w->a is only a diagonal slip, so "salam" loses).
+  const sp5 = await TDK.checkSpelling("swlam");
+  assert.strictEqual(sp5.isCorrect, false);
+  assert.strictEqual(sp5.suggestion, "selam");
+
+  // Neighbouring-key substitution beats an equidistant headword: s and a are adjacent.
+  const sp6 = await TDK.checkSpelling("arabs");
+  assert.strictEqual(sp6.isCorrect, false);
+  assert.strictEqual(sp6.suggestion, "araba");
   console.log("  ✓ TDK.checkSpelling passed.");
 
   console.log("\n All morphology tests passed successfully!");

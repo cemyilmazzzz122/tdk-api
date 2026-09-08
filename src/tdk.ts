@@ -188,6 +188,67 @@ export const COMMON_MISSPELLINGS: Record<string, string> = {
 export const SEY_EXCEPTIONS = new Set(["düşey", "eşey", "konsey", "jersey", "şey"]);
 
 /**
+ * Turkish Q (QWERTY) keyboard geometry for the spell checker's closest-headword
+ * fallback. Plain Damerau-Levenshtein treats every wrong letter as one full
+ * edit, so it cannot tell that "arabs" is much more likely a slip for "araba"
+ * (s and a sit next to each other) than for some equidistant headword, or that
+ * "swlam" is "selam" (w next to e). These tables let a substitution cost a
+ * fraction of an edit when the two keys are physically adjacent — or are the
+ * ASCII/diacritic pair of one another (ı/i, ş/s, ö/o, …), the other dominant
+ * class of Turkish typo — so the nearest *and* most plausible headword wins.
+ * Everyone is assumed to be on a Turkish Q layout.
+ */
+const KEYBOARD_ROWS: ReadonlyArray<readonly [string, number]> = [
+  ["qwertyuıopğü", 0],
+  ["asdfghjklşi", 0.5],
+  ["zxcvbnmöç", 1],
+];
+const KEYBOARD_COORDS: Readonly<Record<string, readonly [number, number]>> = (() => {
+  const coords: Record<string, readonly [number, number]> = {};
+  KEYBOARD_ROWS.forEach(([keys, offset], row) => {
+    [...keys].forEach((key, col) => {
+      coords[key] = [col + offset, row];
+    });
+  });
+  return coords;
+})();
+
+/** ASCII <-> Turkish-diacritic siblings, treated as an almost-free substitution. */
+const DIACRITIC_SIBLINGS: Readonly<Record<string, string>> = {
+  ı: "i", i: "ı", ö: "o", o: "ö", ü: "u", u: "ü",
+  ş: "s", s: "ş", ç: "c", c: "ç", ğ: "g", g: "ğ", â: "a", a: "â",
+};
+
+/** Cost of substituting a key for its left/right neighbour on the same row. */
+const KEYBOARD_ROW_SUB_COST = 0.4;
+/** Cost of substituting a key for a diagonally adjacent one on the row above/below. */
+const KEYBOARD_DIAGONAL_SUB_COST = 0.55;
+/** Cost of confusing a letter with its diacritic/ASCII sibling. */
+const DIACRITIC_SUB_COST = 0.3;
+/** Cost of a transposition ("selam" <-> "selma"): a single wrong finger order. */
+const TRANSPOSITION_COST = 0.8;
+
+/**
+ * Weighted substitution cost between two single characters: 0 if identical,
+ * a small fraction if they are diacritic siblings or neighbouring keys on a
+ * Turkish Q keyboard, otherwise a full 1.
+ */
+function keyboardSubCost(a: string, b: string): number {
+  if (a === b) return 0;
+  if (DIACRITIC_SIBLINGS[a] === b) return DIACRITIC_SUB_COST;
+  const pa = KEYBOARD_COORDS[a];
+  const pb = KEYBOARD_COORDS[b];
+  if (!pa || !pb) return 1;
+  const dx = Math.abs(pa[0] - pb[0]);
+  const dy = Math.abs(pa[1] - pb[1]);
+  // Same row, immediate horizontal neighbour: the most common slip.
+  if (dy === 0 && dx <= 1 + 1e-9) return KEYBOARD_ROW_SUB_COST;
+  // One row up/down and within roughly one key horizontally: a diagonal slip.
+  if (dy === 1 && dx <= 1 + 1e-9) return KEYBOARD_DIAGONAL_SUB_COST;
+  return 1;
+}
+
+/**
  * TDK (Türk Dil Kurumu) API Wrapper
  */
 export class TDK {
@@ -865,27 +926,35 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
     }
 
     // 7. No exact match or morphology root: fall back to closest headword by edit distance.
-    // Ties prefer matching first letter, and initial character mismatches are penalized
-    // so irrelevant foreign loanwords (like 'jersey') do not beat Turkish roots.
-    let best: { candidate: string; distance: number; rawDist: number; firstMismatch: number; lengthMismatch: number } | null = null;
+    // Candidates are ranked by the keyboard-/diacritic-aware distance (so "arabs" picks
+    // "araba" over an equidistant headword because s->a is a neighbouring-key slip, and
+    // "swlam" picks "selam" because w->e is), while the plain integer Damerau-Levenshtein
+    // still gates acceptance. Ties prefer matching first letter, then matching length, and
+    // initial character mismatches are penalized so irrelevant foreign loanwords (like
+    // 'jersey') do not beat Turkish roots.
+    let best:
+      | { candidate: string; score: number; rawDist: number; firstMismatch: number; lengthMismatch: number }
+      | null = null;
     for (const candidate of this.autocompleteCache) {
       if (candidate.includes(" ") || candidate !== candidate.toLocaleLowerCase("tr-TR")) continue;
       if (Math.abs(candidate.length - cleanWord.length) > 2) continue;
 
       const rawDist = this.damerauLevenshtein(cleanWord, candidate);
-      if (rawDist === 0) continue;
+      if (rawDist === 0 || rawDist > 2) continue;
 
       const firstMismatch = candidate[0] === cleanWord[0] ? 0 : 1;
       const lengthMismatch = candidate.length === cleanWord.length ? 0 : 1;
-      const distance = rawDist + (firstMismatch > 0 ? 1.2 : 0);
+      const score = this.keyboardAwareDistance(cleanWord, candidate) + (firstMismatch > 0 ? 1.2 : 0);
 
       const better =
         !best ||
-        distance < best.distance ||
-        (distance === best.distance && firstMismatch < best.firstMismatch) ||
-        (distance === best.distance && firstMismatch === best.firstMismatch && lengthMismatch < best.lengthMismatch);
+        score < best.score - 1e-9 ||
+        (Math.abs(score - best.score) < 1e-9 && firstMismatch < best.firstMismatch) ||
+        (Math.abs(score - best.score) < 1e-9 &&
+          firstMismatch === best.firstMismatch &&
+          lengthMismatch < best.lengthMismatch);
       if (better) {
-        best = { candidate, distance, rawDist, firstMismatch, lengthMismatch };
+        best = { candidate, score, rawDist, firstMismatch, lengthMismatch };
       }
     }
     if (best && best.rawDist <= 2 && (best.firstMismatch === 0 || best.rawDist <= 1)) {
@@ -1413,6 +1482,31 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
         dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
         if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
           dp[i][j] = Math.min(dp[i][j], dp[i - 2][j - 2] + cost);
+        }
+      }
+    }
+    return dp[a.length][b.length];
+  }
+
+  /**
+   * Keyboard- and diacritic-aware edit distance: same optimal-string-alignment
+   * recurrence as {@link damerauLevenshtein}, but a substitution is charged by
+   * {@link keyboardSubCost} (a fraction of an edit when the two letters are
+   * adjacent on a Turkish Q keyboard or are ASCII/diacritic siblings) and a
+   * transposition costs {@link TRANSPOSITION_COST}. Insertions and deletions
+   * still cost a full 1. Used only to *rank* spelling candidates; the plain
+   * integer distance still gates whether a suggestion is offered at all.
+   */
+  private static keyboardAwareDistance(a: string, b: string): number {
+    const dp: number[][] = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+    for (let i = 0; i <= a.length; i++) dp[i][0] = i;
+    for (let j = 0; j <= b.length; j++) dp[0][j] = j;
+    for (let i = 1; i <= a.length; i++) {
+      for (let j = 1; j <= b.length; j++) {
+        const cost = keyboardSubCost(a[i - 1], b[j - 1]);
+        dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
+        if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+          dp[i][j] = Math.min(dp[i][j], dp[i - 2][j - 2] + TRANSPOSITION_COST);
         }
       }
     }
