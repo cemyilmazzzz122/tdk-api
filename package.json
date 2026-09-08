@@ -25,10 +25,30 @@
     "api",
     "turkish",
     "dictionary",
-    "turkce"
+    "turkce",
+    "sozluk.gov.tr",
+    "spell-check",
+    "morphology",
+    "kubbealti",
+    "nisanyan",
+    "wiktionary"
   ],
-  "author": "",
+  "author": "cemyilmazzzz122 <cemyleo12@icloud.com> (https://github.com/cemyilmazzzz122)",
   "license": "MIT",
+  "homepage": "https://github.com/cemyilmazzzz122/tdk-api#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cemyilmazzzz122/tdk-api.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cemyilmazzzz122/tdk-api/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "dist"
+  ],
   "devDependencies": {
     "@types/node": "^22.0.0",
     "tsup": "^8.0.2",
