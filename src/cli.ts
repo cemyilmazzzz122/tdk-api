@@ -48,6 +48,7 @@ const KNOWN_COMMANDS = new Set([
   "kubbealti",
   "nisanyan",
   "viki",
+  "mcp",
 ]);
 
 let command = args[0];
@@ -140,6 +141,14 @@ async function startRepl() {
 }
 
 async function run() {
+  // MCP stdio server: `tdk mcp`, `tdk --mcp`, or invocation as the `tdk-mcp` binary.
+  const binaryName = (process.argv[1] || "").toLowerCase();
+  if (command === "mcp" || rawArgs.includes("--mcp") || binaryName.includes("tdk-mcp")) {
+    const { runMcpServer } = await import("./mcp");
+    await runMcpServer();
+    return;
+  }
+
   if (!command) {
     if (process.stdin.isTTY) {
       await startRepl();
@@ -147,21 +156,21 @@ async function run() {
     }
     console.log("Kullanım: tdk [komut] <kelime> [--json]");
     console.log(
-      "Komutlar: ara, anlam, koken, ornek, hece, uyum, kucukuyum, yazim, kok, deyim, gunun, rastgele, esanlam, karsit, yabanci, kurallar, kural, karsilastir, analiz, oneri, bulmaca, anagram, kafiye, denetle, repl, kubbealti, nisanyan, viki"
+      "Komutlar: ara, anlam, koken, ornek, hece, uyum, kucukuyum, yazim, kok, deyim, gunun, rastgele, esanlam, karsit, yabanci, kurallar, kural, karsilastir, analiz, oneri, bulmaca, anagram, kafiye, denetle, repl, kubbealti, nisanyan, viki, mcp"
     );
     console.log("Not: Komut belirtilmezse doğrudan kelime anlamı aranır (örn: tdk selam)");
     process.exit(1);
   }
 
   if (command === "--version" || command === "-v") {
-    console.log("tdk-api-wrapper v1.5.1");
+    console.log("tdk-api-wrapper v1.7.0");
     process.exit(0);
   }
 
   if (command === "--help" || command === "-h") {
     console.log("Kullanım: tdk [komut] <kelime> [--json]");
     console.log(
-      "Komutlar: ara, anlam, koken, ornek, hece, uyum, kucukuyum, yazim, kok, deyim, gunun, rastgele, esanlam, karsit, yabanci, kurallar, kural, karsilastir, analiz, oneri, bulmaca, anagram, kafiye, denetle, repl, kubbealti, nisanyan, viki"
+      "Komutlar: ara, anlam, koken, ornek, hece, uyum, kucukuyum, yazim, kok, deyim, gunun, rastgele, esanlam, karsit, yabanci, kurallar, kural, karsilastir, analiz, oneri, bulmaca, anagram, kafiye, denetle, repl, kubbealti, nisanyan, viki, mcp"
     );
     console.log("Not: Komut belirtilmezse doğrudan kelime anlamı aranır (örn: tdk selam)");
     process.exit(0);

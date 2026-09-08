@@ -1,5 +1,5 @@
 const assert = require("node:assert");
-const { TDK, TDKClient } = require("../dist/index.js");
+const { TDK, TDKClient, createMcpServer, runMcpServer } = require("../dist/index.js");
 
 async function runTests() {
   console.log("=== Running Linguistic Tools & Client Tests ===");
@@ -41,6 +41,14 @@ async function runTests() {
   assert.strictEqual(typeof client.findRhymes, "function");
   assert.strictEqual(typeof client.checkLabialHarmony, "function");
   console.log("  ✓ TDKClient passed.");
+
+  // 5. MCP server wiring
+  console.log("5. Testing MCP server...");
+  assert.strictEqual(typeof createMcpServer, "function");
+  assert.strictEqual(typeof runMcpServer, "function");
+  const mcp = createMcpServer();
+  assert.ok(mcp && typeof mcp.connect === "function", "createMcpServer must return an McpServer");
+  console.log("  ✓ MCP server passed.");
 
   console.log("\n All linguistic tools & client tests passed successfully!");
 }

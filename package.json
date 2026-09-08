@@ -1,12 +1,13 @@
 {
   "name": "tdk-api-wrapper",
-  "version": "1.6.1",
-  "description": "TDK (Türk Dil Kurumu) unofficial live data API wrapper for Node.js",
+  "version": "1.7.0",
+  "description": "TDK (Türk Dil Kurumu) unofficial live data API wrapper and MCP server for Node.js",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
   "bin": {
-    "tdk": "dist/cli.js"
+    "tdk": "dist/cli.js",
+    "tdk-mcp": "dist/cli.js"
   },
   "exports": {
     ".": {
@@ -31,7 +32,10 @@
     "morphology",
     "kubbealti",
     "nisanyan",
-    "wiktionary"
+    "wiktionary",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol"
   ],
   "author": "cemyilmazzzz122 <cemyleo12@icloud.com> (https://github.com/cemyilmazzzz122)",
   "license": "MIT",
@@ -53,5 +57,9 @@
     "@types/node": "^22.0.0",
     "tsup": "^8.0.2",
     "typescript": "^5.4.5"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^3.25.0 || ^4.0.0"
   }
 }

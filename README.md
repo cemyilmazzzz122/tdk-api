@@ -1,6 +1,6 @@
 # TDK API Node.js Wrapper
 
-Bu proje, Türk Dil Kurumu (TDK) sözlük verilerine Node.js ortamından doğrudan, hızlı ve güvenilir bir şekilde erişim sağlamak amacıyla geliştirilmiş, TypeScript tabanlı resmî olmayan bir sarmalayıcı (wrapper) kütüphanedir. Herhangi bir dış bağımlılığa veya ikili (binary) dosyaya ihtiyaç duymadan HTTP üzerinden güncel verileri çeker.
+Bu proje, Türk Dil Kurumu (TDK) sözlük verilerine Node.js ortamından doğrudan, hızlı ve güvenilir bir şekilde erişim sağlamak amacıyla geliştirilmiş, TypeScript tabanlı resmî olmayan bir sarmalayıcı (wrapper) kütüphanedir. Herhangi bir dış bağımlılığa veya ikili (binary) dosyaya ihtiyaç duymadan HTTP üzerinden güncel verileri çeker. Kütüphanenin yanı sıra bir terminal CLI'si (`tdk`) ve dahili bir **Model Context Protocol (MCP)** sunucusu da paketle birlikte gelir.
 
 ## Kurulum
 
@@ -46,6 +46,7 @@ tdk repl
 tdk kubbealti merhaba
 tdk nisanyan merhaba
 tdk viki merhaba
+tdk mcp                    # MCP (Model Context Protocol) stdio sunucusunu başlatır
 ```
 
 Herhangi bir komuta `--json` bayrağı eklendiğinde çıktı, insan-okunur metin yerine tek satırlık JSON olarak basılır (script/otomasyon kullanımı için):
@@ -137,6 +138,25 @@ TDK dışındaki bu üç kaynak da her zaman kullanılabilir/dokümante edilmiş
 - **`TDK.getKubbealti(word)`**: Kubbealtı Lugatı'nın ("Misalli Büyük Türkçe Sözlük") verilerini `{ kelime, anlam }` dizisi olarak döner (`anlam` zengin tipografi içeren ham HTML'dir). `getKubbealtiMeanings(word)` aynı veriyi düz metne çevirir. `getKubbealtiSuggestions(prefix)` Kubbealtı'nın kendi otomatik tamamlama uç noktasını kullanır (TDK'nin `getSuggestions()`'ından bağımsız, ayrı bir veri kaynağı). Kubbealtı başlıkları klasik Türkçe imlayla (ü/ö/ç/ğ/ş, düzeltme işareti) indekslidir; düz ASCII'ye yakın bir sorgu (örn. `ruzgar`) boş dönerse, kütüphane tek harflik Türkçeleştirme varyasyonlarını (`rüzgâr`, `rûzgar` vb.) otomatik dener. Not: Kubbealtı'nın veri sunucusu (`eski.lugatim.com`) sertifika zincirini eksik gönderiyor; bu kütüphane eksik ara sertifikaları ekleyerek zinciri düzgün doğruluyor (doğrulamayı kapatmıyor) — Let's Encrypt bu ara sertifikayı döndürürse bu entegrasyon `null` dönmeye başlar.
 - **`TDK.getNisanyan(word)`**: Nişanyan Sözlük'ten kelimenin etimoloji paragrafını düz metin olarak döner; kelime bulunamazsa `null`.
 - **`TDK.getWiktionary(word)`**: Türkçe Vikisözlük'ten (`tr.wiktionary.org`) resmî MediaWiki API'si (`action=query&prop=extracts`) üzerinden veri çeker — bu üçü arasında scraping olmayan, resmî ve en kararlı olanı. `{ raw, sections }` döner; `sections` metni `== Köken ==`, `=== Söyleniş ===` gibi başlıklara göre bir sözlüğe ayırır. `getWiktionarySection(word, sectionName)` tek bir bölümü (örn. `"Köken"`) büyük/küçük harf duyarsız süzer. Bu wiki'de başlık büyütme kapalı (`$wgCapitalLinks=false` — "Türkiye" ile bir küçük harfli kelime ayrı sayfalardır), o yüzden `TDK.getWiktionary("türkiye")` gibi tam eşleşmeyen aramalar otomatik olarak ilk harfi (Türkçe kurallarına göre, örn. `istanbul` → `İstanbul`) büyütülmüş hâliyle tekrar denenir.
+
+## Model Context Protocol (MCP) Sunucusu
+
+Paket, bir MCP stdio sunucusu içerir; böylece TDK sözlük, morfoloji, yazım denetimi ve etimoloji araçlarını Claude Desktop, Cursor, Antigravity veya herhangi bir MCP istemcisine yalnızca Node.js ile bağlayabilirsiniz — Python ya da ek bir çalışma zamanı gerekmez.
+
+```json
+{
+  "mcpServers": {
+    "tdk": {
+      "command": "npx",
+      "args": ["-y", "tdk-api-wrapper", "mcp"]
+    }
+  }
+}
+```
+
+Global kuruluysa `tdk mcp` (veya `tdk-mcp`) komutu da aynı sunucuyu başlatır. Sunucu programatik olarak dışa aktarılan `createMcpServer()` / `runMcpServer()` ile de gömülebilir.
+
+Sunulan araçlar: `tdk_lookup`, `tdk_meanings`, `tdk_examples`, `tdk_proverbs`, `tdk_compound_words`, `tdk_part_of_speech`, `tdk_synonyms`, `tdk_antonyms`, `tdk_origin`, `tdk_nisanyan`, `tdk_kubbealti`, `tdk_wiktionary`, `tdk_spell_check`, `tdk_proofread`, `tdk_stem`, `tdk_analyze_text`, `tdk_syllables`, `tdk_vowel_harmony`, `tdk_autocomplete`, `tdk_pattern_search`, `tdk_anagram`, `tdk_rhymes`, `tdk_compare`, `tdk_audio_url`, `tdk_word_of_the_day`, `tdk_random_word`, `tdk_rules`. Her araç JSON metin döndürür; ağ/scraping hataları fırlatmak yerine `isError: true` ile `{ "error": ... }` olarak döner.
 
 ## Hata Yönetimi
 
