@@ -38,7 +38,7 @@
     "model-context-protocol"
   ],
   "author": "cemyilmazzzz122 <cemyleo12@icloud.com> (https://github.com/cemyilmazzzz122)",
-  "license": "MIT",
+  "license": "GPL-3.0-or-later",
   "homepage": "https://github.com/cemyilmazzzz122/tdk-api#readme",
   "repository": {
     "type": "git",

@@ -181,4 +181,4 @@ try {
 
 ## Lisans
 
-Bu proje MIT Lisansı ile lisanslanmıştır. Kullanım hakları ve kısıtlamalar için kaynak kod içerisindeki lisans metnini inceleyebilirsiniz.
+Bu proje GNU General Public License v3.0 (or later) ile lisanslanmıştır. Kullanım hakları ve kısıtlamalar için kaynak kod içerisindeki [LICENSE](./LICENSE) dosyasını inceleyebilirsiniz.
