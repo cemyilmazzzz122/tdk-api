@@ -19,234 +19,17 @@ import type {
 } from "./types";
 import { TDKValidationError, TDKNetworkError } from "./errors";
 import { getStemCandidates } from "./morphology";
+import { COMMON_MISSPELLINGS, SEY_EXCEPTIONS } from "./data/misspellings";
+import { KUBBEALTI_EXTRA_CA } from "./data/kubbealti-ca";
+import { damerauLevenshtein, keyboardAwareDistance } from "./lib/edit-distance";
+import { htmlToPlainText } from "./lib/html";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import * as https from "node:https";
 import * as tls from "node:tls";
 
-/**
- * Known frequent Turkish misspellings, erroneously joined compound words,
- * and words where vowel dropping is prohibited by TDK (Yazım Kılavuzu).
- */
-export const COMMON_MISSPELLINGS: Record<string, string> = {
-  // -şey ile biten ve ayrı yazılması zorunlu söz öbekleri
-  herşey: "her şey",
-  hersey: "her şey",
-  birşey: "bir şey",
-  birsey: "bir şey",
-  hiçbirşey: "hiçbir şey",
-  hicbirsey: "hiçbir şey",
-  çokşey: "çok şey",
-  coksey: "çok şey",
-  şeyler: "şeyler",
-  seyler: "şeyler",
-  herhangibirşey: "herhangi bir şey",
-  herhangibirsey: "herhangi bir şey",
-
-  // Sıkça birleşik yazılan ama ayrı yazılması gereken sözler
-  hergün: "her gün",
-  hergun: "her gün",
-  herzaman: "her zaman",
-  heran: "her an",
-  heryer: "her yer",
-  herbiri: "her biri",
-  pekçok: "pek çok",
-  pekcok: "pek çok",
-  pekaz: "pek az",
-  yada: "ya da",
-  tabiki: "tabii ki",
-  tabiiki: "tabii ki",
-  sağol: "sağ ol",
-  sagol: "sağ ol",
-  sağolun: "sağ olun",
-  sagolun: "sağ olun",
-  hoşçakal: "hoşça kal",
-  hoscakal: "hoşça kal",
-  hoşgeldin: "hoş geldin",
-  hosgeldin: "hoş geldin",
-  hoşgeldiniz: "hoş geldiniz",
-  hosgeldiniz: "hoş geldiniz",
-  hoşbulduk: "hoş bulduk",
-  hosbulduk: "hoş bulduk",
-  yanısıra: "yanı sıra",
-  yanisira: "yanı sıra",
-  peşisıra: "peşi sıra",
-  pesisira: "peşi sıra",
-  ardısıra: "ardı sıra",
-  ardisira: "ardı sıra",
-  artarda: "art arda",
-  yüzyüze: "yüz yüze",
-  yuzyuze: "yüz yüze",
-  elele: "el ele",
-  gözgöze: "göz göze",
-  başbaşa: "baş başa",
-  basbasa: "baş başa",
-  yanyana: "yan yana",
-  içiçe: "iç içe",
-  icice: "iç içe",
-  üstüste: "üst üste",
-  ustuste: "üst üste",
-  altalta: "alt alta",
-  önsöz: "ön söz",
-  onsoz: "ön söz",
-  önyargı: "ön yargı",
-  onyargi: "ön yargı",
-  farketmek: "fark etmek",
-  farketti: "fark etti",
-  farkettim: "fark ettim",
-  farkeder: "fark eder",
-  farketmez: "fark etmez",
-  terketmek: "terk etmek",
-  terketti: "terk etti",
-  ayırdetmek: "ayırt etmek",
-  ayırtetmek: "ayırt etmek",
-  arzetmek: "arz etmek",
-  arzederim: "arz ederim",
-  varolmak: "var olmak",
-  yokolmak: "yok olmak",
-  haketmek: "hak etmek",
-  haketti: "hak etti",
-  hakkaten: "hakikaten",
-  hiçkimse: "hiç kimse",
-  hickimse: "hiç kimse",
-
-  // Ünlü düşmesi yapılmaması gereken yer bildiren sözler (TDK Kural 15)
-  burda: "burada",
-  burdan: "buradan",
-  şurda: "şurada",
-  surda: "şurada",
-  şurdan: "şuradan",
-  surdan: "şuradan",
-  orda: "orada",
-  ordan: "oradan",
-  içerde: "içeride",
-  icerde: "içeride",
-  içerden: "içeriden",
-  icerden: "içeriden",
-  dışarda: "dışarıda",
-  disarda: "dışarıda",
-  dışardan: "dışarıdan",
-  disardan: "dışarıdan",
-  yukarda: "yukarıda",
-  yukardan: "yukarıdan",
-
-  // Sıkça yanlış yazılan sözcükler
-  herkez: "herkes",
-  yanlız: "yalnız",
-  yalnış: "yanlış",
-  orjinal: "orijinal",
-  labaratuar: "laboratuvar",
-  laboratuar: "laboratuvar",
-  şöför: "şoför",
-  sofor: "şoför",
-  egzos: "egzoz",
-  eksoz: "egzoz",
-  ekzoz: "egzoz",
-  kiprik: "kirpik",
-  kirbit: "kibrit",
-  klavuz: "kılavuz",
-  kıravat: "kravat",
-  süpriz: "sürpriz",
-  supriz: "sürpriz",
-  raslantı: "rastlantı",
-  hastahane: "hastane",
-  pastahane: "pastane",
-  postahane: "postane",
-  eczahane: "eczane",
-  meyva: "meyve",
-  sarmısak: "sarımsak",
-  dinazor: "dinozor",
-  pantalon: "pantolon",
-  tesbih: "tespih",
-  ahçı: "aşçı",
-  matba: "matbaa",
-  idda: "iddia",
-  iddaa: "iddia",
-  muhattap: "muhatap",
-  traş: "tıraş",
-  karnıbahar: "karnabahar",
-  kareografi: "koreografi",
-  poaça: "poğaça",
-  pohaça: "poğaça",
-  şarz: "şarj",
-  sarj: "şarj",
-  makina: "makine",
-  müsade: "müsaade",
-  entellektüel: "entelektüel",
-  inisiyatif: "inisiyatif",
-  insiyatif: "inisiyatif",
-  sezeryan: "sezaryen",
-  doküman: "doküman",
-  döküman: "doküman",
-  erozyon: "erozyon",
-  erizyon: "erozyon",
-  anane: "anneanne",
-  babaanne: "babaanne",
-};
-
-export const SEY_EXCEPTIONS = new Set(["düşey", "eşey", "konsey", "jersey", "şey"]);
-
-/**
- * Turkish Q (QWERTY) keyboard geometry for the spell checker's closest-headword
- * fallback. Plain Damerau-Levenshtein treats every wrong letter as one full
- * edit, so it cannot tell that "arabs" is much more likely a slip for "araba"
- * (s and a sit next to each other) than for some equidistant headword, or that
- * "swlam" is "selam" (w next to e). These tables let a substitution cost a
- * fraction of an edit when the two keys are physically adjacent — or are the
- * ASCII/diacritic pair of one another (ı/i, ş/s, ö/o, …), the other dominant
- * class of Turkish typo — so the nearest *and* most plausible headword wins.
- * Everyone is assumed to be on a Turkish Q layout.
- */
-const KEYBOARD_ROWS: ReadonlyArray<readonly [string, number]> = [
-  ["qwertyuıopğü", 0],
-  ["asdfghjklşi", 0.5],
-  ["zxcvbnmöç", 1],
-];
-const KEYBOARD_COORDS: Readonly<Record<string, readonly [number, number]>> = (() => {
-  const coords: Record<string, readonly [number, number]> = {};
-  KEYBOARD_ROWS.forEach(([keys, offset], row) => {
-    [...keys].forEach((key, col) => {
-      coords[key] = [col + offset, row];
-    });
-  });
-  return coords;
-})();
-
-/** ASCII <-> Turkish-diacritic siblings, treated as an almost-free substitution. */
-const DIACRITIC_SIBLINGS: Readonly<Record<string, string>> = {
-  ı: "i", i: "ı", ö: "o", o: "ö", ü: "u", u: "ü",
-  ş: "s", s: "ş", ç: "c", c: "ç", ğ: "g", g: "ğ", â: "a", a: "â",
-};
-
-/** Cost of substituting a key for its left/right neighbour on the same row. */
-const KEYBOARD_ROW_SUB_COST = 0.4;
-/** Cost of substituting a key for a diagonally adjacent one on the row above/below. */
-const KEYBOARD_DIAGONAL_SUB_COST = 0.55;
-/** Cost of confusing a letter with its diacritic/ASCII sibling. */
-const DIACRITIC_SUB_COST = 0.3;
-/** Cost of a transposition ("selam" <-> "selma"): a single wrong finger order. */
-const TRANSPOSITION_COST = 0.8;
-
-/**
- * Weighted substitution cost between two single characters: 0 if identical,
- * a small fraction if they are diacritic siblings or neighbouring keys on a
- * Turkish Q keyboard, otherwise a full 1.
- */
-function keyboardSubCost(a: string, b: string): number {
-  if (a === b) return 0;
-  if (DIACRITIC_SIBLINGS[a] === b) return DIACRITIC_SUB_COST;
-  const pa = KEYBOARD_COORDS[a];
-  const pb = KEYBOARD_COORDS[b];
-  if (!pa || !pb) return 1;
-  const dx = Math.abs(pa[0] - pb[0]);
-  const dy = Math.abs(pa[1] - pb[1]);
-  // Same row, immediate horizontal neighbour: the most common slip.
-  if (dy === 0 && dx <= 1 + 1e-9) return KEYBOARD_ROW_SUB_COST;
-  // One row up/down and within roughly one key horizontally: a diagonal slip.
-  if (dy === 1 && dx <= 1 + 1e-9) return KEYBOARD_DIAGONAL_SUB_COST;
-  return 1;
-}
+export { COMMON_MISSPELLINGS, SEY_EXCEPTIONS } from "./data/misspellings";
 
 /**
  * TDK (Türk Dil Kurumu) API Wrapper
@@ -255,83 +38,6 @@ export class TDK {
   private static readonly BASE_URL = "https://sozluk.gov.tr";
   private static readonly AUDIO_API_HOST = "api.sozluk.gov.tr";
   private static readonly KUBBEALTI_HOST = "eski.lugatim.com";
-
-  /**
-   * `eski.lugatim.com` (Kubbealtı Lugatı's data API) sends only its leaf
-   * certificate during the TLS handshake, omitting the intermediates a
-   * correctly configured server would include — a server-side misconfiguration,
-   * not something we should paper over by disabling verification. These are
-   * the two certificates the server *should* be sending (fetched from the
-   * leaf's own Authority Information Access URLs), supplied here so Node can
-   * still build a full, properly verified chain up to a root it already
-   * trusts (ISRG Root X1). If Let's Encrypt rotates this intermediate, this
-   * stops working and every Kubbealtı call fails closed to `null` — same
-   * fail-closed contract as the rest of this file's fragile integrations.
-   */
-  private static readonly KUBBEALTI_EXTRA_CA = [
-    `-----BEGIN CERTIFICATE-----
-MIIE2jCCAsKgAwIBAgIQTr0klH4k05SALYSlL9WzGTANBgkqhkiG9w0BAQsFADAu
-MQswCQYDVQQGEwJVUzENMAsGA1UEChMESVNSRzEQMA4GA1UEAxMHUm9vdCBZUjAe
-Fw0yNTA5MDMwMDAwMDBaFw0yODA5MDIyMzU5NTlaMDMxCzAJBgNVBAYTAlVTMRYw
-FAYDVQQKEw1MZXQncyBFbmNyeXB0MQwwCgYDVQQDEwNZUjIwggEiMA0GCSqGSIb3
-DQEBAQUAA4IBDwAwggEKAoIBAQDZ0LxwBppqh84luqMerV/eeL/fXQ7mLQQv1Lnp
-WKZbyvGpx6wh6AfnslAnF6ewTkcHA+gSOoBvm3Dfm06AuGiF+KRut4fAcowqnAQQ
-CW98+QPP/eOv/wug7Iyk4NkOxf2I6g2f55T6nJoOTLFcukeRq80JGQEYan+dPFr9
-OGUgQK2hGKgNkW87pappsOAuUJcroYhRt5uUis4qaZireiseu32gzDJNBAiKtsvd
-6HX4v25bpkRNcS/B/Gtc9kVbUpD+2PLPxdei3Tim55k4tfAEXwD2qyiPTxrTNq6l
-N+AMr5g2c1dNqkOTwjxeV6L5lpP1rGiYvLnRaPlOqyZRPW+5AgMBAAGjge4wgesw
-DgYDVR0PAQH/BAQDAgGGMBMGA1UdJQQMMAoGCCsGAQUFBwMBMBIGA1UdEwEB/wQI
-MAYBAf8CAQAwHQYDVR0OBBYEFEAVLSZ57TIgnt+ach3WMh+BDIEMMB8GA1UdIwQY
-MBaAFN7nW2DQIm1AKH0/DQH+pLVStFGUMDIGCCsGAQUFBwEBBCYwJDAiBggrBgEF
-BQcwAoYWaHR0cDovL3lyLmkubGVuY3Iub3JnLzATBgNVHSAEDDAKMAgGBmeBDAEC
-ATAnBgNVHR8EIDAeMBygGqAYhhZodHRwOi8veXIuYy5sZW5jci5vcmcvMA0GCSqG
-SIb3DQEBCwUAA4ICAQB0ZUQWZ9/Yn9COEpo+JfecMnB0h0vwDm/M66IqXqw3LoaL
-mx9lZvRTeDIS67PUeI3yCA2W6PKRD0/FE/G57lOmS+Xy5AaaL00ICGOqjNcCaMWW
-8o8nevHOd4i4lqgtznE/28QwlcdJyF8yBiWHpnyjhEpmNWJURgOCOg2xpwRMBCsj
-MScqYPtOhBeuYQvSwAEeTML2Ukh6uGuX4E14q65Ja8cdjF5bAldnP1eE4FBaAwsZ
-G2fOqqrKV03Y85Nw2btedP1AtliQuJZs/Jo/gXxXdc7LrH3McgnpnbTiAncX7yES
-hP6kzQejllqMCIt52HOjxDGWafS7Xw+DKwqmH+Eqy8dcbOuag/1AYlQoKNVK3F5q
-Hh6tEDiMqQcLIibGKteE6iHo4A/bIScbzrhXUYuism42ZYzmc48FMVIH3qy4L84E
-TdAH2gtxw0PAhvRVXp8HP7wfngpzsN/8xOTpeRSbM4+Qbc56G6+Bifmv6sk1ieQb
-NA3wJdl4DDUuQSV8hBgx6zoI1ZSGORprDFux7c6rhc77QZMSRrEgomBeklervEve
-86ylWmZ3WWHV6RLMi8xNvjd71r4EPIGgY7BZU/VPBkq+uA7Gb6mbJnFgV43uh3xy
-LRFgxIAphIukwTGSMZZR+AI+Qnp0BYTWovHXozOf3H8r6hozEoT02JHn0AeTfA==
------END CERTIFICATE-----`,
-    `-----BEGIN CERTIFICATE-----
-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
------END CERTIFICATE-----`,
-  ];
 
   // Configuration
   private static defaultTimeoutMs = 8000;
@@ -939,12 +645,12 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
       if (candidate.includes(" ") || candidate !== candidate.toLocaleLowerCase("tr-TR")) continue;
       if (Math.abs(candidate.length - cleanWord.length) > 2) continue;
 
-      const rawDist = this.damerauLevenshtein(cleanWord, candidate);
+      const rawDist = damerauLevenshtein(cleanWord, candidate);
       if (rawDist === 0 || rawDist > 2) continue;
 
       const firstMismatch = candidate[0] === cleanWord[0] ? 0 : 1;
       const lengthMismatch = candidate.length === cleanWord.length ? 0 : 1;
-      const score = this.keyboardAwareDistance(cleanWord, candidate) + (firstMismatch > 0 ? 1.2 : 0);
+      const score = keyboardAwareDistance(cleanWord, candidate) + (firstMismatch > 0 ? 1.2 : 0);
 
       const better =
         !best ||
@@ -1085,27 +791,10 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
       const contentEnd = html.indexOf("<footer", contentStart);
       if (contentEnd === -1) return null;
 
-      return this.htmlToPlainText(html.slice(contentStart, contentEnd));
+      return htmlToPlainText(html.slice(contentStart, contentEnd));
     } catch {
       return null;
     }
-  }
-
-  private static htmlToPlainText(html: string): string {
-    return html
-      .replace(/<br\s*\/?>/gi, "\n")
-      .replace(/<\/(p|div)>/gi, "\n\n")
-      .replace(/<[^>]+>/g, "")
-      .replace(/&nbsp;/gi, " ")
-      .replace(/&lt;/gi, "<")
-      .replace(/&gt;/gi, ">")
-      .replace(/&quot;/gi, '"')
-      .replace(/&#39;|&rsquo;/gi, "'")
-      .replace(/&amp;/gi, "&")
-      .replace(/[ \t]+/g, " ")
-      .replace(/[ \t]*\n[ \t]*/g, "\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .trim();
   }
 
   /**
@@ -1121,7 +810,7 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
           hostname: this.KUBBEALTI_HOST,
           path,
           method: "GET",
-          ca: [...tls.rootCertificates, ...this.KUBBEALTI_EXTRA_CA],
+          ca: [...tls.rootCertificates, ...KUBBEALTI_EXTRA_CA],
           headers: {
             "User-Agent":
               "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
@@ -1217,7 +906,7 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
   public static async getKubbealtiMeanings(word: string): Promise<string[] | null> {
     const entries = await this.getKubbealti(word);
     if (!entries) return null;
-    return entries.map((e) => this.htmlToPlainText(e.anlam));
+    return entries.map((e) => htmlToPlainText(e.anlam));
   }
 
   /**
@@ -1250,7 +939,7 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
       const html = await response.text();
       const match = html.match(/<meta name="description" content="([^"]*)"/);
       if (!match) return null;
-      const description = this.htmlToPlainText(match[1]);
+      const description = htmlToPlainText(match[1]);
       if (description === "Çağdaş Türkçenin Etimolojisi") return null;
       return description;
     } catch {
@@ -1463,54 +1152,6 @@ yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==
       await this.delay(200);
     }
     return analyses;
-  }
-
-  /**
-   * Damerau-Levenshtein edit-distance (optimal string alignment variant):
-   * like classic Levenshtein but also counts an adjacent-character
-   * transposition (e.g. "yanlız" -> "yalnız") as a single edit instead of
-   * two substitutions — a very common class of typo that plain Levenshtein
-   * otherwise misses.
-   */
-  private static damerauLevenshtein(a: string, b: string): number {
-    const dp: number[][] = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
-    for (let i = 0; i <= a.length; i++) dp[i][0] = i;
-    for (let j = 0; j <= b.length; j++) dp[0][j] = j;
-    for (let i = 1; i <= a.length; i++) {
-      for (let j = 1; j <= b.length; j++) {
-        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-        dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
-        if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
-          dp[i][j] = Math.min(dp[i][j], dp[i - 2][j - 2] + cost);
-        }
-      }
-    }
-    return dp[a.length][b.length];
-  }
-
-  /**
-   * Keyboard- and diacritic-aware edit distance: same optimal-string-alignment
-   * recurrence as {@link damerauLevenshtein}, but a substitution is charged by
-   * {@link keyboardSubCost} (a fraction of an edit when the two letters are
-   * adjacent on a Turkish Q keyboard or are ASCII/diacritic siblings) and a
-   * transposition costs {@link TRANSPOSITION_COST}. Insertions and deletions
-   * still cost a full 1. Used only to *rank* spelling candidates; the plain
-   * integer distance still gates whether a suggestion is offered at all.
-   */
-  private static keyboardAwareDistance(a: string, b: string): number {
-    const dp: number[][] = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
-    for (let i = 0; i <= a.length; i++) dp[i][0] = i;
-    for (let j = 0; j <= b.length; j++) dp[0][j] = j;
-    for (let i = 1; i <= a.length; i++) {
-      for (let j = 1; j <= b.length; j++) {
-        const cost = keyboardSubCost(a[i - 1], b[j - 1]);
-        dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
-        if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
-          dp[i][j] = Math.min(dp[i][j], dp[i - 2][j - 2] + TRANSPOSITION_COST);
-        }
-      }
-    }
-    return dp[a.length][b.length];
   }
 
   /**
