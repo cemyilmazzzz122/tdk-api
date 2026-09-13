@@ -77,14 +77,21 @@ function printError(message: string) {
 
 async function startRepl() {
   const readline = await import("node:readline");
+  // Warm the headword list in the background so Tab completion is instant.
+  void TDK.preloadHeadwords();
+
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
     prompt: c.cyan("tdk> "),
+    completer: (line: string): [string[], string] => {
+      const token = line.split(/\s+/).pop() ?? "";
+      return [TDK.getInstantSuggestions(token, 20), token];
+    },
   });
 
   console.log(c.bold("TDK İnteraktif Sözlük Kabuğu (Çıkmak için 'exit' veya Ctrl+C)"));
-  console.log(c.dim("Komutlar: ara <kelime>, hece <kelime>, bulmaca <desen>, denetle <metin> veya doğrudan kelime"));
+  console.log(c.dim("Komutlar: ara <kelime>, hece <kelime>, oneri <önek>, bulmaca <desen>, denetle <metin> veya doğrudan kelime (Tab: otomatik tamamlama)"));
   rl.prompt();
 
   rl.on("line", async (line) => {
@@ -123,6 +130,9 @@ async function startRepl() {
       } else if (subCmd === "kucukuyum") {
         const h = TDK.checkLabialHarmony(subArg);
         console.log(`Küçük Ünlü Uyumu: ${h ? c.green("Uyar") : c.red("Uymaz")}`);
+      } else if (subCmd === "oneri") {
+        const suggestions = await TDK.getSuggestions(subArg);
+        console.log(suggestions.length === 0 ? c.dim("Öneri bulunamadı.") : suggestions.map((s) => c.cyan(s)).join(", "));
       } else if (subCmd === "bulmaca" || subCmd === "pattern") {
         const matches = await TDK.patternSearch(subArg);
         console.log(matches.slice(0, 15).join(", "));
@@ -148,6 +158,10 @@ async function run() {
     await runMcpServer();
     return;
   }
+
+  // Keep the ~81k headword list on disk so `oneri`, `yazim`, `bulmaca` etc. don't
+  // re-download it on every invocation (opt out with TDK_DISK_CACHE=0).
+  TDK.configure({ diskCache: process.env.TDK_DISK_CACHE !== "0" });
 
   if (!command) {
     if (process.stdin.isTTY) {

@@ -222,9 +222,14 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     "tdk_autocomplete",
-    "Bir önek ile başlayan sözlük maddelerini (autocomplete) döndürür.",
-    { prefix: z.string().describe("Aranacak önek (örn: 'kalem').") },
-    guard(async ({ prefix }) => ok({ prefix, suggestions: await TDK.getSuggestions(prefix) }))
+    "Bir önek ile başlayan sözlük maddelerini (autocomplete) Türk alfabesi sırasıyla döndürür.",
+    {
+      prefix: z.string().describe("Aranacak önek (örn: 'kalem')."),
+      max_results: z.number().int().min(1).max(100).default(10).describe("En fazla sonuç sayısı."),
+    },
+    guard(async ({ prefix, max_results }) =>
+      ok({ prefix, suggestions: await TDK.getSuggestions(prefix, max_results) })
+    )
   );
 
   server.tool(
@@ -328,6 +333,11 @@ export function createMcpServer(): McpServer {
 
 /** Starts the TDK MCP server over stdio (used by the `tdk mcp` CLI command). */
 export async function runMcpServer(): Promise<void> {
+  // Standalone server: persist the headword list on disk (opt out with TDK_DISK_CACHE=0)
+  // and warm it in the background so headword tools answer instantly.
+  TDK.configure({ diskCache: process.env.TDK_DISK_CACHE !== "0" });
+  void TDK.preloadHeadwords();
+
   const server = createMcpServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
