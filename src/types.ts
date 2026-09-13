@@ -182,6 +182,11 @@ export interface TDKConfig {
   cache?: boolean;
   maxCacheSize?: number;
   /**
+   * Maximum parallel TDK requests for batch methods (`getWordsBatch`,
+   * `analyzeText`, `groupByOrigin`). Default: 4.
+   */
+  concurrency?: number;
+  /**
    * Makes methods that normally degrade to `null`/`[]` on failure throw instead
    * (`TDKNetworkError` for request/HTTP failures, `TDKParseError` when a source's
    * content no longer matches what the scraper expects), so "not found" and

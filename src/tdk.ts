@@ -20,6 +20,7 @@ import type {
 } from "./types";
 import { TDKError, TDKValidationError, TDKNetworkError, TDKParseError } from "./errors";
 import { linkedTimeoutSignal, raceAbort } from "./lib/abort";
+import { mapWithConcurrency } from "./lib/pool";
 import { getStemCandidates } from "./morphology";
 import { COMMON_MISSPELLINGS, SEY_EXCEPTIONS } from "./data/misspellings";
 import { KUBBEALTI_EXTRA_CA } from "./data/kubbealti-ca";
@@ -93,6 +94,7 @@ export class TDKClient {
   private defaultTimeoutMs = 8000;
   private defaultRetries = 1;
   private maxCacheSize = 1000;
+  private concurrency = 4;
 
   // Cache Mechanism
   private isCacheEnabled = false;
@@ -121,6 +123,7 @@ export class TDKClient {
     if (config.retries !== undefined) this.defaultRetries = Math.max(0, config.retries);
     if (config.cache !== undefined) this.enableCache(config.cache);
     if (config.maxCacheSize !== undefined) this.maxCacheSize = Math.max(10, config.maxCacheSize);
+    if (config.concurrency !== undefined) this.concurrency = Math.max(1, Math.floor(config.concurrency));
     if (config.diskCache !== undefined) this.diskCacheEnabled = config.diskCache;
     if (config.diskCacheDir !== undefined) this.diskCacheDir = config.diskCacheDir;
     if (config.strict !== undefined) this.strict = config.strict;
@@ -630,15 +633,24 @@ export class TDKClient {
 
   /**
    * Groups a list of words by their etymological origin. Words not found in
-   * the dictionary are grouped under "Bilinmiyor". Throttled like getWordsBatch.
+   * the dictionary are grouped under "Bilinmiyor". Lookups run with bounded
+   * concurrency like getWordsBatch; groups keep the input order.
    */
   public async groupByOrigin(words: string[], options: RequestOptions = {}): Promise<Record<string, string[]>> {
+    const unique = [...new Set(words)];
+    const origins = await mapWithConcurrency(
+      unique,
+      this.concurrency,
+      (word) => this.getOrigin(word, false, options),
+      options.signal
+    );
+    const originOf = new Map(unique.map((word, i) => [word, origins[i] ?? "Bilinmiyor"]));
+
     const groups: Record<string, string[]> = {};
     for (const word of words) {
-      const origin = (await this.getOrigin(word, false, options)) ?? "Bilinmiyor";
+      const origin = originOf.get(word)!;
       if (!groups[origin]) groups[origin] = [];
       groups[origin].push(word);
-      await this.delay(200, options.signal);
     }
     return groups;
   }
@@ -1334,7 +1346,7 @@ export class TDKClient {
   /**
    * Analyzes every distinct word in a text (Turkish stopwords filtered out),
    * returning each word's first meaning and etymological origin if found.
-   * Looks each word up individually (throttled), so scales with text length.
+   * Looks each distinct word up individually (bounded concurrency), so scales with text length.
    * TDK only indexes dictionary (dictionary/root) forms, not inflected ones —
    * it does no morphological analysis, and neither does this method: a
    * suffixed word like "evde" or "dildir" (root "ev"/"dil" plus a case/verb
@@ -1349,54 +1361,60 @@ export class TDKClient {
       .filter((w) => w.length > 1 && !STOPWORDS.has(w));
     const unique = [...new Set(words)];
 
-    const analyses: WordAnalysis[] = [];
-    for (const word of unique) {
-      let results = await this.getWord(word, options);
-      let found = results.length > 0;
-      let root: string | undefined;
-      let isInflected: boolean | undefined;
+    return mapWithConcurrency(unique, this.concurrency, (word) => this.analyzeWord(word, options), options.signal);
+  }
 
-      if (!found) {
-        const resolvedRoot = await this.findRoot(word, options);
-        if (resolvedRoot) {
-          results = await this.getWord(resolvedRoot, options);
-          if (results.length > 0) {
-            found = true;
-            root = resolvedRoot;
-            isInflected = true;
-          }
+  private async analyzeWord(word: string, options: RequestOptions): Promise<WordAnalysis> {
+    let results = await this.getWord(word, options);
+    let found = results.length > 0;
+    let root: string | undefined;
+    let isInflected: boolean | undefined;
+
+    if (!found) {
+      const resolvedRoot = await this.findRoot(word, options);
+      if (resolvedRoot) {
+        results = await this.getWord(resolvedRoot, options);
+        if (results.length > 0) {
+          found = true;
+          root = resolvedRoot;
+          isInflected = true;
         }
       }
-
-      analyses.push({
-        word,
-        found,
-        meaning: found ? this.firstMeaning(results) : null,
-        origin: found ? results[0].lisan || "Türkçe" : null,
-        root,
-        isInflected,
-      });
-      await this.delay(200, options.signal);
     }
-    return analyses;
+
+    return {
+      word,
+      found,
+      meaning: found ? this.firstMeaning(results) : null,
+      origin: found ? results[0].lisan || "Türkçe" : null,
+      root,
+      isInflected,
+    };
   }
 
   /**
-   * Fetches multiple words concurrently with a small delay to avoid rate limiting.
+   * Fetches multiple words with bounded concurrency (`concurrency`, default 4).
+   * Repeated words (case-insensitive) are fetched once; results keep the input
+   * order, and a word whose lookup fails yields `[]`.
    */
   public async getWordsBatch(words: string[], options: RequestOptions = {}): Promise<WordInfo[][]> {
-    const results: WordInfo[][] = [];
-    for (const word of words) {
-      try {
-        const res = await this.getWord(word, options);
-        results.push(res);
-      } catch (error) {
-        if (options.signal?.aborted) throw error;
-        results.push([]);
-      }
-      await this.delay(200, options.signal); // 200ms throttle
-    }
-    return results;
+    const keyOf = (word: string) => (word ?? "").trim().toLocaleLowerCase("tr-TR");
+    const unique = [...new Set(words.map(keyOf))];
+    const fetched = await mapWithConcurrency(
+      unique,
+      this.concurrency,
+      async (word) => {
+        try {
+          return await this.getWord(word, options);
+        } catch (error) {
+          if (options.signal?.aborted) throw error;
+          return [];
+        }
+      },
+      options.signal
+    );
+    const byKey = new Map(unique.map((word, i) => [word, fetched[i]]));
+    return words.map((word) => byKey.get(keyOf(word))!);
   }
 
   /**
