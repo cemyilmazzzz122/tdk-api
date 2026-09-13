@@ -15,9 +15,11 @@ import type {
   PatternSearchOptions,
   AnagramOptions,
   RhymeOptions,
+  RequestOptions,
   TDKConfig,
 } from "./types";
 import { TDKValidationError, TDKNetworkError } from "./errors";
+import { linkedTimeoutSignal, raceAbort } from "./lib/abort";
 import { getStemCandidates } from "./morphology";
 import { COMMON_MISSPELLINGS, SEY_EXCEPTIONS } from "./data/misspellings";
 import { KUBBEALTI_EXTRA_CA } from "./data/kubbealti-ca";
@@ -36,6 +38,20 @@ const BASE_URL = "https://sozluk.gov.tr";
 const AUDIO_API_HOST = "api.sozluk.gov.tr";
 const KUBBEALTI_HOST = "eski.lugatim.com";
 const HEADWORD_DISK_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** The headword bundle is a few MB, so it gets more time than a JSON lookup. */
+const BUNDLE_TIMEOUT_MS = 30_000;
+const USER_AGENT = "TDK-API-Nodejs-Wrapper/1.0";
+const BROWSER_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
+
+interface HttpResponse {
+  status: number;
+  body: Buffer;
+}
+
+function isOk(res: HttpResponse): boolean {
+  return res.status >= 200 && res.status < 300;
+}
 
 const TURKISH_DEASCII_MAP: Record<string, string[]> = {
   a: ["â"],
@@ -148,46 +164,92 @@ export class TDKClient {
     return value;
   }
 
-  private delay(ms: number) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+  private delay(ms: number, signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) return reject(signal.reason);
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(signal!.reason);
+      };
+      const timer = setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
   }
 
   /**
-   * Internal helper that performs HTTP fetch with timeout and automatic retry on network/5xx errors.
+   * Handles a failure inside a method that degrades to `null`/`[]` instead of
+   * throwing. A caller-initiated abort is always rethrown, so cancellation
+   * propagates even through these fail-silent methods.
    */
-  private async fetchWithRetry(
-    url: string,
-    options: RequestInit = {},
-    retries: number = this.defaultRetries,
-    timeoutMs: number = this.defaultTimeoutMs
-  ): Promise<Response> {
+  private softFail(_error: unknown, signal?: AbortSignal): void {
+    if (signal?.aborted) throw signal.reason;
+  }
+
+  private fetchOnce(url: string, headers: Record<string, string>, signal: AbortSignal): Promise<HttpResponse> {
+    return fetch(url, { headers: { "User-Agent": USER_AGENT, ...headers }, signal }).then(async (res) => ({
+      status: res.status,
+      body: Buffer.from(await res.arrayBuffer()),
+    }));
+  }
+
+  /**
+   * `node:https` transport for endpoints `fetch` can't talk to: `gts-yeni`
+   * needs a manual `Origin` header (a forbidden header name for undici), and
+   * Kubbealtı needs extra CA certificates.
+   */
+  private httpsOnce(options: https.RequestOptions, signal: AbortSignal): Promise<HttpResponse> {
+    return new Promise((resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      const req = https.request({ method: "GET", ...options, signal }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks) }));
+        res.on("error", reject);
+      });
+      req.on("error", reject);
+      req.end();
+    });
+  }
+
+  /**
+   * Performs a GET with a per-attempt timeout (covering the body download) and
+   * automatic retry on network errors and 5xx responses. Resolves with any
+   * response below 500 (and a 5xx on the last attempt); rejects with
+   * `TDKNetworkError` once attempts run out, or with the abort reason if the
+   * caller's `signal` fires.
+   */
+  private async request(
+    target: string | https.RequestOptions,
+    {
+      signal,
+      headers = {},
+      retries = this.defaultRetries,
+      timeoutMs = this.defaultTimeoutMs,
+    }: RequestOptions & { headers?: Record<string, string>; retries?: number; timeoutMs?: number } = {}
+  ): Promise<HttpResponse> {
     let lastError: unknown;
     for (let attempt = 0; attempt <= retries; attempt++) {
+      if (signal?.aborted) throw signal.reason;
+      const linked = linkedTimeoutSignal(signal, timeoutMs);
       try {
-        const signal = AbortSignal.timeout(timeoutMs);
-        const headers = {
-          "User-Agent": "TDK-API-Nodejs-Wrapper/1.0",
-          ...((options.headers as Record<string, string>) || {}),
-        };
-        const res = await fetch(url, { ...options, headers, signal });
-        if (res.ok || (res.status >= 400 && res.status < 500)) {
-          return res;
-        }
-        // If 5xx server error, retry
-        if (attempt < retries) {
-          await this.delay(200 * (attempt + 1));
-          continue;
-        }
-        return res;
+        const res =
+          typeof target === "string"
+            ? await this.fetchOnce(target, headers, linked.signal)
+            : await this.httpsOnce(target, linked.signal);
+        if (res.status < 500 || attempt === retries) return res;
       } catch (err) {
+        if (signal?.aborted) throw signal.reason;
         lastError = err;
-        if (attempt < retries) {
-          await this.delay(200 * (attempt + 1));
-          continue;
-        }
+      } finally {
+        linked.dispose();
       }
+      if (attempt < retries) await this.delay(200 * (attempt + 1), signal);
     }
-    throw new TDKNetworkError(`Request to ${url} failed after ${retries + 1} attempts.`, {
+    const where = typeof target === "string" ? target : `https://${target.hostname}${target.path ?? ""}`;
+    throw new TDKNetworkError(`Request to ${where} failed after ${retries + 1} attempts.`, {
       cause: lastError,
     });
   }
@@ -195,7 +257,7 @@ export class TDKClient {
   /**
    * Fetches detailed information for a given word from the TDK Dictionary.
    */
-  public async getWord(word: string): Promise<WordInfo[]> {
+  public async getWord(word: string, options: RequestOptions = {}): Promise<WordInfo[]> {
     if (!word || word.trim() === "") {
       throw new TDKValidationError("Word parameter cannot be empty.");
     }
@@ -209,14 +271,15 @@ export class TDKClient {
 
     const url = `${BASE_URL}/gts?ara=${encodeURIComponent(cleanWord)}`;
 
-    let response: Response;
+    let response: HttpResponse;
     try {
-      response = await this.fetchWithRetry(url);
+      response = await this.request(url, options);
     } catch (error) {
+      if (options.signal?.aborted) throw error;
       throw new TDKNetworkError("Failed to fetch word from TDK: request failed.", { cause: error });
     }
 
-    if (!response.ok) {
+    if (!isOk(response)) {
       throw new TDKNetworkError(`Failed to fetch word from TDK: HTTP ${response.status}.`, {
         status: response.status,
       });
@@ -224,7 +287,7 @@ export class TDKClient {
 
     let data: unknown;
     try {
-      data = await response.json();
+      data = JSON.parse(response.body.toString("utf8"));
     } catch (error) {
       throw new TDKNetworkError("Failed to fetch word from TDK: invalid JSON response.", { cause: error });
     }
@@ -244,10 +307,10 @@ export class TDKClient {
   /**
    * Helper method to get only the meanings (definitions) of a word as a string array.
    */
-  public async getMeanings(word: string): Promise<string[]> {
-    const results = await this.getWord(word);
+  public async getMeanings(word: string, options: RequestOptions = {}): Promise<string[]> {
+    const results = await this.getWord(word, options);
     if (results.length === 0) return [];
-    
+
     const meanings: string[] = [];
     for (const result of results) {
       if (result.anlamlarListe) {
@@ -268,24 +331,21 @@ export class TDKClient {
    * page to find that asset's current hashed filename, downloads it (a few
    * MB, only once per process), and extracts the literal out of it. Fragile
    * scraping of an implementation detail — if TDK's build stops embedding
-   * this, this fails closed to `[]` rather than throwing.
+   * this, this fails closed to `[]` rather than throwing. It takes no caller
+   * signal: the load is shared, so one caller's abort must not cancel it.
    */
   private async fetchAutocompleteData(): Promise<string[]> {
     try {
-      const homeResponse = await fetch(`${BASE_URL}/`, {
-        headers: { "User-Agent": "TDK-API-Nodejs-Wrapper/1.0" },
-      });
-      if (!homeResponse.ok) return [];
-      const html = await homeResponse.text();
-
-      const scriptMatch = html.match(/src="(\/assets\/index-[^"]+\.js)"/);
+      const home = await this.request(`${BASE_URL}/`);
+      if (!isOk(home)) return [];
+      const scriptMatch = home.body.toString("utf8").match(/src="(\/assets\/index-[^"]+\.js)"/);
       if (!scriptMatch) return [];
 
-      const bundleResponse = await fetch(`${BASE_URL}${scriptMatch[1]}`, {
-        headers: { "User-Agent": "TDK-API-Nodejs-Wrapper/1.0" },
+      const bundle = await this.request(`${BASE_URL}${scriptMatch[1]}`, {
+        timeoutMs: Math.max(this.defaultTimeoutMs, BUNDLE_TIMEOUT_MS),
       });
-      if (!bundleResponse.ok) return [];
-      const bundleJs = await bundleResponse.text();
+      if (!isOk(bundle)) return [];
+      const bundleJs = bundle.body.toString("utf8");
 
       const startMarker = 'JSON.parse(`[{"madde":';
       const startIdx = bundleJs.indexOf(startMarker);
@@ -296,7 +356,8 @@ export class TDKClient {
 
       const data = JSON.parse(bundleJs.slice(jsonStart, jsonEnd)) as { madde: string }[];
       return data.map((item) => item.madde).filter(Boolean);
-    } catch {
+    } catch (error) {
+      this.softFail(error);
       return [];
     }
   }
@@ -358,18 +419,22 @@ export class TDKClient {
   /**
    * Ensures TDK's ~81k headword list is loaded in memory for fast O(1) set operations.
    * Concurrent callers share one in-flight load; a failed (empty) load is retried
-   * on the next call.
+   * on the next call. An aborted `signal` stops waiting without cancelling the
+   * shared load.
    */
-  private ensureAutocompleteLoaded(): Promise<void> {
-    return this.headwords.ensure(() => this.loadHeadwords());
+  private ensureAutocompleteLoaded(signal?: AbortSignal): Promise<void> {
+    return raceAbort(
+      this.headwords.ensure(() => this.loadHeadwords()),
+      signal
+    );
   }
 
   /**
    * Loads TDK's headword list ahead of time (e.g. at process start) so later
    * `getInstantSuggestions()` calls hit memory. Resolves to whether it loaded.
    */
-  public async preloadHeadwords(): Promise<boolean> {
-    await this.ensureAutocompleteLoaded();
+  public async preloadHeadwords(options: RequestOptions = {}): Promise<boolean> {
+    await this.ensureAutocompleteLoaded(options.signal);
     return this.headwords.loaded;
   }
 
@@ -390,10 +455,10 @@ export class TDKClient {
    * and cached once per process regardless of `enableCache()` — the same
    * caching behavior as before — and only cleared by `clearCache()`.
    */
-  public async getSuggestions(prefix: string, limit = 10): Promise<string[]> {
+  public async getSuggestions(prefix: string, limit = 10, options: RequestOptions = {}): Promise<string[]> {
     if (!prefix || prefix.trim() === "") return [];
 
-    await this.ensureAutocompleteLoaded();
+    await this.ensureAutocompleteLoaded(options.signal);
     return this.getInstantSuggestions(prefix, limit);
   }
 
@@ -401,19 +466,20 @@ export class TDKClient {
    * Checks whether a word exists as a known headword in TDK dictionary.
    * Checks the in-memory headword set (81k headwords) if loaded, or queries TDK API.
    */
-  public async isHeadword(word: string): Promise<boolean> {
+  public async isHeadword(word: string, options: RequestOptions = {}): Promise<boolean> {
     if (!word || word.trim() === "") return false;
     const clean = word.trim().toLocaleLowerCase("tr-TR");
 
-    await this.ensureAutocompleteLoaded();
+    await this.ensureAutocompleteLoaded(options.signal);
     if (this.headwords.loaded) {
       return this.headwords.set.has(clean);
     }
 
     try {
-      const results = await this.getWord(clean);
+      const results = await this.getWord(clean, options);
       return results.length > 0;
-    } catch {
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
       return false;
     }
   }
@@ -431,7 +497,7 @@ export class TDKClient {
    * and evaluating candidate stems generated by morphological analysis.
    * Returns the root headword string if found, or null if no match in TDK.
    */
-  public async findRoot(word: string): Promise<string | null> {
+  public async findRoot(word: string, options: RequestOptions = {}): Promise<string | null> {
     if (!word || word.trim() === "") return null;
     const clean = word.trim().toLocaleLowerCase("tr-TR");
 
@@ -439,7 +505,7 @@ export class TDKClient {
     if (cachedRoot !== undefined) return cachedRoot;
 
     // 1. If the word itself is an exact headword, it is its own root
-    if (await this.isHeadword(clean)) {
+    if (await this.isHeadword(clean, options)) {
       this.setBoundedCache(this.stemCache, clean, clean);
       return clean;
     }
@@ -447,7 +513,7 @@ export class TDKClient {
     // 2. Test morphological stem candidates
     const candidates = getStemCandidates(clean);
     for (const candidate of candidates) {
-      if (await this.isHeadword(candidate)) {
+      if (await this.isHeadword(candidate, options)) {
         this.setBoundedCache(this.stemCache, clean, candidate);
         return candidate;
       }
@@ -461,10 +527,10 @@ export class TDKClient {
    * Performs morphological stemming on a Turkish word.
    * Returns a StemResult containing the original word, resolved root, and whether it is inflected.
    */
-  public async stem(word: string): Promise<StemResult | null> {
+  public async stem(word: string, options: RequestOptions = {}): Promise<StemResult | null> {
     if (!word || word.trim() === "") return null;
     const clean = word.trim().toLocaleLowerCase("tr-TR");
-    const root = await this.findRoot(word);
+    const root = await this.findRoot(word, options);
 
     if (!root) {
       return null;
@@ -481,8 +547,8 @@ export class TDKClient {
   /**
    * Returns a list of proverbs and idioms containing the word.
    */
-  public async getProverbs(word: string): Promise<string[]> {
-    const results = await this.getWord(word);
+  public async getProverbs(word: string, options: RequestOptions = {}): Promise<string[]> {
+    const results = await this.getWord(word, options);
     if (results.length === 0) return [];
     
     const proverbs: string[] = [];
@@ -502,14 +568,18 @@ export class TDKClient {
    * that isn't a headword itself ("kitaplarımız") reports its root's origin.
    * Returns `null` only when neither the word nor its root is found.
    */
-  public async getOrigin(word: string, fallbackStem = false): Promise<string | null> {
-    const results = await this.getWord(word);
+  public async getOrigin(
+    word: string,
+    fallbackStem = false,
+    options: RequestOptions = {}
+  ): Promise<string | null> {
+    const results = await this.getWord(word, options);
     if (results.length > 0) return results[0].lisan || "Türkçe";
     if (!fallbackStem) return null;
 
-    const root = await this.findRoot(word);
+    const root = await this.findRoot(word, options);
     if (!root || root === word.trim().toLocaleLowerCase("tr-TR")) return null;
-    const rootResults = await this.getWord(root);
+    const rootResults = await this.getWord(root, options);
     return rootResults.length > 0 ? rootResults[0].lisan || "Türkçe" : null;
   }
 
@@ -517,8 +587,8 @@ export class TDKClient {
    * Returns whether the word has a recorded foreign etymological origin.
    * Returns `null` (instead of a boolean) when the word isn't found at all.
    */
-  public async isForeignWord(word: string): Promise<boolean | null> {
-    const origin = await this.getOrigin(word);
+  public async isForeignWord(word: string, options: RequestOptions = {}): Promise<boolean | null> {
+    const origin = await this.getOrigin(word, false, options);
     if (origin === null) return null;
     return origin !== "Türkçe";
   }
@@ -527,13 +597,13 @@ export class TDKClient {
    * Groups a list of words by their etymological origin. Words not found in
    * the dictionary are grouped under "Bilinmiyor". Throttled like getWordsBatch.
    */
-  public async groupByOrigin(words: string[]): Promise<Record<string, string[]>> {
+  public async groupByOrigin(words: string[], options: RequestOptions = {}): Promise<Record<string, string[]>> {
     const groups: Record<string, string[]> = {};
     for (const word of words) {
-      const origin = (await this.getOrigin(word)) ?? "Bilinmiyor";
+      const origin = (await this.getOrigin(word, false, options)) ?? "Bilinmiyor";
       if (!groups[origin]) groups[origin] = [];
       groups[origin].push(word);
-      await this.delay(200);
+      await this.delay(200, options.signal);
     }
     return groups;
   }
@@ -541,8 +611,11 @@ export class TDKClient {
   /**
    * Returns literature examples containing the word.
    */
-  public async getExamples(word: string): Promise<{ sentence: string; author: string | null }[]> {
-    const results = await this.getWord(word);
+  public async getExamples(
+    word: string,
+    options: RequestOptions = {}
+  ): Promise<{ sentence: string; author: string | null }[]> {
+    const results = await this.getWord(word, options);
     const examples: { sentence: string; author: string | null }[] = [];
     
     for (const result of results) {
@@ -573,40 +646,30 @@ export class TDKClient {
    * TDK tightens this check further, this should fail closed to `null`
    * rather than throw.
    */
-  private fetchGtsYeni(word: string): Promise<any[] | null> {
-    return new Promise((resolve) => {
-      const req = https.request(
+  private async fetchGtsYeni(word: string, signal?: AbortSignal): Promise<any[] | null> {
+    try {
+      const res = await this.request(
         {
           hostname: AUDIO_API_HOST,
           path: `/gts-yeni?ara=${encodeURIComponent(word)}`,
-          method: "GET",
           headers: {
-            "User-Agent":
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            "User-Agent": BROWSER_USER_AGENT,
             Origin: BASE_URL,
             Referer: `${BASE_URL}/`,
           },
         },
-        (res) => {
-          let body = "";
-          res.on("data", (chunk) => (body += chunk));
-          res.on("end", () => {
-            try {
-              const data = JSON.parse(body);
-              resolve(Array.isArray(data) ? data : null);
-            } catch {
-              resolve(null);
-            }
-          });
-        }
+        { signal }
       );
-      req.on("error", () => resolve(null));
-      req.end();
-    });
+      const data = JSON.parse(res.body.toString("utf8"));
+      return Array.isArray(data) ? data : null;
+    } catch (error) {
+      this.softFail(error, signal);
+      return null;
+    }
   }
 
-  private async fetchSeskod(word: string): Promise<string | null> {
-    const data = await this.fetchGtsYeni(word);
+  private async fetchSeskod(word: string, signal?: AbortSignal): Promise<string | null> {
+    const data = await this.fetchGtsYeni(word, signal);
     const seskod = data?.[0]?.seskod;
     return seskod ? String(seskod) : null;
   }
@@ -616,9 +679,9 @@ export class TDKClient {
    * across all of its meanings. Uses the same undocumented `gts-yeni`
    * endpoint as `getAudioUrl` — returns `[]` if the lookup fails.
    */
-  public async getSynonyms(word: string): Promise<string[]> {
+  public async getSynonyms(word: string, options: RequestOptions = {}): Promise<string[]> {
     if (!word || word.trim() === "") return [];
-    const data = await this.fetchGtsYeni(word.trim().toLocaleLowerCase("tr-TR"));
+    const data = await this.fetchGtsYeni(word.trim().toLocaleLowerCase("tr-TR"), options.signal);
     if (!data) return [];
 
     const synonyms: string[] = [];
@@ -637,9 +700,9 @@ export class TDKClient {
    * across all of its meanings. Uses the same undocumented `gts-yeni`
    * endpoint as `getAudioUrl` — returns `[]` if the lookup fails.
    */
-  public async getAntonyms(word: string): Promise<string[]> {
+  public async getAntonyms(word: string, options: RequestOptions = {}): Promise<string[]> {
     if (!word || word.trim() === "") return [];
-    const data = await this.fetchGtsYeni(word.trim().toLocaleLowerCase("tr-TR"));
+    const data = await this.fetchGtsYeni(word.trim().toLocaleLowerCase("tr-TR"), options.signal);
     if (!data) return [];
 
     const antonyms: string[] = [];
@@ -656,12 +719,12 @@ export class TDKClient {
   /**
    * Returns the direct URL of the audio pronunciation, if TDK has one recorded for this word.
    */
-  public async getAudioUrl(word: string): Promise<string | null> {
+  public async getAudioUrl(word: string, options: RequestOptions = {}): Promise<string | null> {
     if (!word || word.trim() === "") {
       throw new TDKValidationError("Word parameter cannot be empty.");
     }
 
-    const seskod = await this.fetchSeskod(word.trim().toLocaleLowerCase("tr-TR"));
+    const seskod = await this.fetchSeskod(word.trim().toLocaleLowerCase("tr-TR"), options.signal);
     if (!seskod) return null;
     return `https://${AUDIO_API_HOST}/ses/${encodeURIComponent(seskod)}.wav`;
   }
@@ -669,18 +732,22 @@ export class TDKClient {
   /**
    * Downloads the audio pronunciation to the specified path.
    */
-  public async downloadAudio(word: string, destPath?: string): Promise<string | null> {
-    const url = await this.getAudioUrl(word);
+  public async downloadAudio(
+    word: string,
+    destPath?: string,
+    options: RequestOptions = {}
+  ): Promise<string | null> {
+    const url = await this.getAudioUrl(word, options);
     if (!url) return null;
-    
+
     const finalPath = destPath || path.join(os.tmpdir(), `${word}.wav`);
     try {
-      const res = await fetch(url);
-      if (!res.ok) return null;
-      const buffer = await res.arrayBuffer();
-      fs.writeFileSync(finalPath, Buffer.from(buffer));
+      const res = await this.request(url, options);
+      if (!isOk(res)) return null;
+      await fs.promises.writeFile(finalPath, res.body);
       return finalPath;
-    } catch {
+    } catch (error) {
+      this.softFail(error, options.signal);
       return null;
     }
   }
@@ -688,7 +755,7 @@ export class TDKClient {
   /**
    * Checks spelling and returns suggestions if wrong.
    */
-  public async checkSpelling(word: string): Promise<SpellCheckResult> {
+  public async checkSpelling(word: string, options: RequestOptions = {}): Promise<SpellCheckResult> {
     if (!word || word.trim() === "") {
       return { isCorrect: false, word };
     }
@@ -696,7 +763,7 @@ export class TDKClient {
     const cleanWord = word.trim().toLocaleLowerCase("tr-TR");
 
     // 1. Check if word exists in TDK dictionary
-    const results = await this.getWord(word);
+    const results = await this.getWord(word, options);
     if (results.length > 0) {
       return { isCorrect: true, word };
     }
@@ -723,7 +790,7 @@ export class TDKClient {
     }
 
     // 4. "Sıkça yapılan yanlışlar" from DailyContent
-    const daily = await this.getDailyContent();
+    const daily = await this.getDailyContent(false, options);
     if (daily) {
       const syydMatch = daily.syyd.find((s) => s.yanliskelime.toLocaleLowerCase("tr-TR") === cleanWord);
       if (syydMatch) {
@@ -737,7 +804,7 @@ export class TDKClient {
 
     // 5. Morphology Fallback: Check if the word is an inflected form or bare verb imperative of a known headword
     // (e.g., "halılarımızın" -> "halı", "kitabımız" -> "kitap", "çocuğa" -> "çocuk", "söyle" -> "söylemek")
-    const root = await this.findRoot(word);
+    const root = await this.findRoot(word, options);
     if (root) {
       const isInflected = root !== cleanWord;
       return {
@@ -749,7 +816,7 @@ export class TDKClient {
     }
 
     // 6. Check if headwords with spaces match when space is removed (e.g. "ön yargı" for "önyargı")
-    await this.ensureAutocompleteLoaded();
+    await this.ensureAutocompleteLoaded(options.signal);
     for (const candidate of this.headwords.words) {
       if (candidate.includes(" ")) {
         const candidateNoSpace = candidate.replace(/\s+/g, "").toLocaleLowerCase("tr-TR");
@@ -805,29 +872,26 @@ export class TDKClient {
    * caching is enabled the loop would just re-read the same cached response
    * 25 times and could never find a rule outside that first random draw.
    */
-  public async getDailyContent(bypassCache = false): Promise<DailyContent | null> {
+  public async getDailyContent(bypassCache = false, options: RequestOptions = {}): Promise<DailyContent | null> {
     if (!bypassCache && this.isCacheEnabled && this.dailyContentCache) return this.dailyContentCache;
 
     try {
-      const response = await fetch(`${BASE_URL}/icerik`, {
-        headers: { "User-Agent": "TDK-API-Nodejs-Wrapper/1.0" },
-      });
-      if (response.ok) {
-        const data = await response.json() as DailyContent;
-        if (!bypassCache && this.isCacheEnabled) this.dailyContentCache = data;
-        return data;
-      }
-    } catch {
+      const response = await this.request(`${BASE_URL}/icerik`, options);
+      if (!isOk(response)) return null;
+      const data = JSON.parse(response.body.toString("utf8")) as DailyContent;
+      if (!bypassCache && this.isCacheEnabled) this.dailyContentCache = data;
+      return data;
+    } catch (error) {
+      this.softFail(error, options.signal);
       return null;
     }
-    return null;
   }
 
   /**
    * Returns today's word of the day along with all of its listed meanings.
    */
-  public async getWordOfTheDay(): Promise<WordOfTheDay | null> {
-    const daily = await this.getDailyContent();
+  public async getWordOfTheDay(options: RequestOptions = {}): Promise<WordOfTheDay | null> {
+    const daily = await this.getDailyContent(false, options);
     if (!daily || daily.kelime.length === 0) return null;
 
     const word = daily.kelime[0].madde;
@@ -839,8 +903,8 @@ export class TDKClient {
    * Picks a random entry (word or proverb) from today's daily content.
    * Note: this samples from today's `getDailyContent()` picks, not the full dictionary.
    */
-  public async getRandomWord(): Promise<DailyPick | null> {
-    const daily = await this.getDailyContent();
+  public async getRandomWord(options: RequestOptions = {}): Promise<DailyPick | null> {
+    const daily = await this.getDailyContent(false, options);
     if (!daily) return null;
 
     const pool: DailyPick[] = [
@@ -861,8 +925,8 @@ export class TDKClient {
    * (used internally by `getRule()`'s retry loop) forces a fresh `/icerik`
    * draw even when `enableCache(true)` is on.
    */
-  public async getKurallar(bypassCache = false): Promise<TDKRule[]> {
-    const daily = await this.getDailyContent(bypassCache);
+  public async getKurallar(bypassCache = false, options: RequestOptions = {}): Promise<TDKRule[]> {
+    const daily = await this.getDailyContent(bypassCache, options);
     return daily?.kural ?? [];
   }
 
@@ -883,7 +947,7 @@ export class TDKClient {
    * the first draw happened to be. Returns `null` if no match turns up
    * within the attempt budget or the matched page can't be parsed.
    */
-  public async getRule(name: string): Promise<string | null> {
+  public async getRule(name: string, options: RequestOptions = {}): Promise<string | null> {
     if (!name || name.trim() === "") return null;
     const target = name.trim().toLocaleLowerCase("tr-TR");
 
@@ -891,11 +955,11 @@ export class TDKClient {
     const ROUNDS = 5;
     for (let round = 0; round < ROUNDS; round++) {
       const batches = await Promise.all(
-        Array.from({ length: BATCH_SIZE }, () => this.getKurallar(true))
+        Array.from({ length: BATCH_SIZE }, () => this.getKurallar(true, options))
       );
       for (const rules of batches) {
         const match = rules.find((r) => r.adi.toLocaleLowerCase("tr-TR").includes(target));
-        if (match) return this.fetchRuleText(match.url);
+        if (match) return this.fetchRuleText(match.url, options.signal);
       }
     }
     return null;
@@ -907,11 +971,11 @@ export class TDKClient {
    * `<footer class="entry...">` (share buttons, author box, structured-data
    * spans) — cutting there avoids that trailing cruft.
    */
-  private async fetchRuleText(url: string): Promise<string | null> {
+  private async fetchRuleText(url: string, signal?: AbortSignal): Promise<string | null> {
     try {
-      const response = await fetch(url, { headers: { "User-Agent": "TDK-API-Nodejs-Wrapper/1.0" } });
-      if (!response.ok) return null;
-      const html = await response.text();
+      const response = await this.request(url, { signal });
+      if (!isOk(response)) return null;
+      const html = response.body.toString("utf8");
 
       const marker = html.indexOf('itemprop="text"');
       if (marker === -1) return null;
@@ -920,7 +984,8 @@ export class TDKClient {
       if (contentEnd === -1) return null;
 
       return htmlToPlainText(html.slice(contentStart, contentEnd));
-    } catch {
+    } catch (error) {
+      this.softFail(error, signal);
       return null;
     }
   }
@@ -931,39 +996,23 @@ export class TDKClient {
    * certificate chain (see the constant's doc comment). Fails closed to
    * `null` on any error — network, TLS, HTTP, or JSON parse.
    */
-  private fetchKubbealtiJson(path: string): Promise<any> {
-    return new Promise((resolve) => {
-      const req = https.request(
+  private async fetchKubbealtiJson(path: string, signal?: AbortSignal): Promise<any> {
+    try {
+      const res = await this.request(
         {
           hostname: KUBBEALTI_HOST,
           path,
-          method: "GET",
           ca: [...tls.rootCertificates, ...KUBBEALTI_EXTRA_CA],
-          headers: {
-            "User-Agent":
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-          },
+          headers: { "User-Agent": BROWSER_USER_AGENT },
         },
-        (res) => {
-          if (res.statusCode !== 200) {
-            res.resume();
-            resolve(null);
-            return;
-          }
-          let body = "";
-          res.on("data", (chunk) => (body += chunk));
-          res.on("end", () => {
-            try {
-              resolve(JSON.parse(body));
-            } catch {
-              resolve(null);
-            }
-          });
-        }
+        { signal }
       );
-      req.on("error", () => resolve(null));
-      req.end();
-    });
+      if (res.status !== 200) return null;
+      return JSON.parse(res.body.toString("utf8"));
+    } catch (error) {
+      this.softFail(error, signal);
+      return null;
+    }
   }
 
   /**
@@ -999,17 +1048,20 @@ export class TDKClient {
    * comes up empty (see its doc comment). Returns `null` on any fetch/parse
    * failure, `[]` if no variant matches either.
    */
-  public async getKubbealti(word: string): Promise<KubbealtiEntry[] | null> {
+  public async getKubbealti(word: string, options: RequestOptions = {}): Promise<KubbealtiEntry[] | null> {
     if (!word || word.trim() === "") return null;
 
-    const data = await this.fetchKubbealtiJson(`/rest/s/${encodeURIComponent(word.trim())}/`);
+    const data = await this.fetchKubbealtiJson(`/rest/s/${encodeURIComponent(word.trim())}/`, options.signal);
     if (!data || !Array.isArray(data.content)) return null;
     if (data.content.length > 0) {
       return data.content.map((entry: any) => ({ kelime: entry.kelime, anlam: entry.anlam }));
     }
 
     for (const variant of this.generateTurkishVariants(word)) {
-      const variantData = await this.fetchKubbealtiJson(`/rest/s/${encodeURIComponent(variant)}/`);
+      const variantData = await this.fetchKubbealtiJson(
+        `/rest/s/${encodeURIComponent(variant)}/`,
+        options.signal
+      );
       if (variantData && Array.isArray(variantData.content) && variantData.content.length > 0) {
         return variantData.content.map((entry: any) => ({ kelime: entry.kelime, anlam: entry.anlam }));
       }
@@ -1021,8 +1073,8 @@ export class TDKClient {
    * Same as `getKubbealti()` but with each entry's `anlam` HTML stripped to
    * plain text via `htmlToPlainText()`.
    */
-  public async getKubbealtiMeanings(word: string): Promise<string[] | null> {
-    const entries = await this.getKubbealti(word);
+  public async getKubbealtiMeanings(word: string, options: RequestOptions = {}): Promise<string[] | null> {
+    const entries = await this.getKubbealti(word, options);
     if (!entries) return null;
     return entries.map((e) => htmlToPlainText(e.anlam));
   }
@@ -1031,9 +1083,12 @@ export class TDKClient {
    * Autocomplete suggestions from Kubbealtı Lugatı's own typeahead endpoint
    * (separate from `getSuggestions()`, which uses TDK's data).
    */
-  public async getKubbealtiSuggestions(prefix: string): Promise<string[]> {
+  public async getKubbealtiSuggestions(prefix: string, options: RequestOptions = {}): Promise<string[]> {
     if (!prefix || prefix.trim() === "") return [];
-    const data = await this.fetchKubbealtiJson(`/rest/word-search/${encodeURIComponent(prefix.trim())}`);
+    const data = await this.fetchKubbealtiJson(
+      `/rest/word-search/${encodeURIComponent(prefix.trim())}`,
+      options.signal
+    );
     if (!Array.isArray(data)) return [];
     return data.map((item: any) => item.display).filter(Boolean);
   }
@@ -1046,33 +1101,34 @@ export class TDKClient {
    * word isn't found (the page falls back to a generic site tagline in that
    * case) or the request fails.
    */
-  public async getNisanyan(word: string): Promise<string | null> {
+  public async getNisanyan(word: string, options: RequestOptions = {}): Promise<string | null> {
     if (!word || word.trim() === "") return null;
     try {
-      const response = await fetch(
+      const response = await this.request(
         `https://www.nisanyansozluk.com/kelime/${encodeURIComponent(word.trim().toLocaleLowerCase("tr-TR"))}`,
-        { headers: { "User-Agent": "TDK-API-Nodejs-Wrapper/1.0" } }
+        options
       );
-      if (!response.ok) return null;
-      const html = await response.text();
+      if (!isOk(response)) return null;
+      const html = response.body.toString("utf8");
       const match = html.match(/<meta name="description" content="([^"]*)"/);
       if (!match) return null;
       const description = htmlToPlainText(match[1]);
       if (description === "Çağdaş Türkçenin Etimolojisi") return null;
       return description;
-    } catch {
+    } catch (error) {
+      this.softFail(error, options.signal);
       return null;
     }
   }
 
-  private async fetchWiktionaryEntry(title: string): Promise<WiktionaryEntry | null> {
+  private async fetchWiktionaryEntry(title: string, signal?: AbortSignal): Promise<WiktionaryEntry | null> {
     try {
       const url = `https://tr.wiktionary.org/w/api.php?action=query&prop=extracts&titles=${encodeURIComponent(
         title
       )}&format=json&explaintext=1&formatversion=2`;
-      const response = await fetch(url, { headers: { "User-Agent": "TDK-API-Nodejs-Wrapper/1.0" } });
-      if (!response.ok) return null;
-      const data = await response.json();
+      const response = await this.request(url, { signal });
+      if (!isOk(response)) return null;
+      const data = JSON.parse(response.body.toString("utf8"));
       const page = data?.query?.pages?.[0];
       if (!page || page.missing || !page.extract) return null;
 
@@ -1087,7 +1143,8 @@ export class TDKClient {
         if (title) sections[title] = content ?? "";
       }
       return { raw, sections };
-    } catch {
+    } catch (error) {
+      this.softFail(error, signal);
       return null;
     }
   }
@@ -1106,16 +1163,16 @@ export class TDKClient {
    * "Istanbul") before giving up. Returns `null` if neither is found or the
    * request fails.
    */
-  public async getWiktionary(word: string): Promise<WiktionaryEntry | null> {
+  public async getWiktionary(word: string, options: RequestOptions = {}): Promise<WiktionaryEntry | null> {
     if (!word || word.trim() === "") return null;
     const trimmed = word.trim();
 
-    const direct = await this.fetchWiktionaryEntry(trimmed);
+    const direct = await this.fetchWiktionaryEntry(trimmed, options.signal);
     if (direct) return direct;
 
     const capitalized = trimmed.charAt(0).toLocaleUpperCase("tr-TR") + trimmed.slice(1);
     if (capitalized === trimmed) return null;
-    return this.fetchWiktionaryEntry(capitalized);
+    return this.fetchWiktionaryEntry(capitalized, options.signal);
   }
 
   /**
@@ -1123,8 +1180,12 @@ export class TDKClient {
    * text (e.g. `getWiktionarySection(word, "Köken")` for etymology), matched
    * case-insensitively. Returns `null` if the word or the section isn't found.
    */
-  public async getWiktionarySection(word: string, sectionName: string): Promise<string | null> {
-    const entry = await this.getWiktionary(word);
+  public async getWiktionarySection(
+    word: string,
+    sectionName: string,
+    options: RequestOptions = {}
+  ): Promise<string | null> {
+    const entry = await this.getWiktionary(word, options);
     if (!entry) return null;
     const key = Object.keys(entry.sections).find(
       (k) => k.toLocaleLowerCase("tr-TR") === sectionName.trim().toLocaleLowerCase("tr-TR")
@@ -1135,8 +1196,8 @@ export class TDKClient {
   /**
    * Returns compound words that contain this word.
    */
-  public async getCompoundWords(word: string): Promise<string[]> {
-    const results = await this.getWord(word);
+  public async getCompoundWords(word: string, options: RequestOptions = {}): Promise<string[]> {
+    const results = await this.getWord(word, options);
     if (results.length === 0) return [];
     
     const compound: string[] = [];
@@ -1155,8 +1216,8 @@ export class TDKClient {
    * sıfat/zarf/isim) with usage-register tags (`tur: "4"`, e.g. mecaz/argo)
    * in the same list — only `tur === "3"` entries are actual parts of speech.
    */
-  public async getPartOfSpeech(word: string): Promise<string[]> {
-    const results = await this.getWord(word);
+  public async getPartOfSpeech(word: string, options: RequestOptions = {}): Promise<string[]> {
+    const results = await this.getWord(word, options);
     const pos = new Set<string>();
 
     for (const result of results) {
@@ -1180,12 +1241,12 @@ export class TDKClient {
    * Compares two words side by side: meaning count, etymological origin,
    * syllables and vowel-harmony compliance.
    */
-  public async compareWords(a: string, b: string): Promise<WordComparison> {
+  public async compareWords(a: string, b: string, options: RequestOptions = {}): Promise<WordComparison> {
     const [meaningsA, meaningsB, originA, originB] = await Promise.all([
-      this.getMeanings(a),
-      this.getMeanings(b),
-      this.getOrigin(a),
-      this.getOrigin(b),
+      this.getMeanings(a, options),
+      this.getMeanings(b, options),
+      this.getOrigin(a, false, options),
+      this.getOrigin(b, false, options),
     ]);
     return {
       a: {
@@ -1226,7 +1287,7 @@ export class TDKClient {
    * suffix) will come back `found: false` even though the root is a real
    * headword. This is an inherent limitation of the data source, not a bug.
    */
-  public async analyzeText(text: string): Promise<WordAnalysis[]> {
+  public async analyzeText(text: string, options: RequestOptions = {}): Promise<WordAnalysis[]> {
     const words = text
       .toLocaleLowerCase("tr-TR")
       .replace(/[^\p{L}\s]/gu, " ")
@@ -1236,15 +1297,15 @@ export class TDKClient {
 
     const analyses: WordAnalysis[] = [];
     for (const word of unique) {
-      let results = await this.getWord(word);
+      let results = await this.getWord(word, options);
       let found = results.length > 0;
       let root: string | undefined;
       let isInflected: boolean | undefined;
 
       if (!found) {
-        const resolvedRoot = await this.findRoot(word);
+        const resolvedRoot = await this.findRoot(word, options);
         if (resolvedRoot) {
-          results = await this.getWord(resolvedRoot);
+          results = await this.getWord(resolvedRoot, options);
           if (results.length > 0) {
             found = true;
             root = resolvedRoot;
@@ -1261,7 +1322,7 @@ export class TDKClient {
         root,
         isInflected,
       });
-      await this.delay(200);
+      await this.delay(200, options.signal);
     }
     return analyses;
   }
@@ -1269,16 +1330,17 @@ export class TDKClient {
   /**
    * Fetches multiple words concurrently with a small delay to avoid rate limiting.
    */
-  public async getWordsBatch(words: string[]): Promise<WordInfo[][]> {
+  public async getWordsBatch(words: string[], options: RequestOptions = {}): Promise<WordInfo[][]> {
     const results: WordInfo[][] = [];
     for (const word of words) {
       try {
-        const res = await this.getWord(word);
+        const res = await this.getWord(word, options);
         results.push(res);
-      } catch {
+      } catch (error) {
+        if (options.signal?.aborted) throw error;
         results.push([]);
       }
-      await this.delay(200); // 200ms throttle
+      await this.delay(200, options.signal); // 200ms throttle
     }
     return results;
   }
@@ -1383,7 +1445,7 @@ export class TDKClient {
    */
   public async patternSearch(pattern: string, options?: PatternSearchOptions): Promise<string[]> {
     if (!pattern || pattern.trim() === "") return [];
-    await this.ensureAutocompleteLoaded();
+    await this.ensureAutocompleteLoaded(options?.signal);
 
     const cleanPattern = pattern.trim().toLocaleLowerCase("tr-TR");
     const escaped = cleanPattern
@@ -1413,7 +1475,7 @@ export class TDKClient {
    */
   public async findAnagrams(letters: string, options?: AnagramOptions): Promise<string[]> {
     if (!letters || letters.trim() === "") return [];
-    await this.ensureAutocompleteLoaded();
+    await this.ensureAutocompleteLoaded(options?.signal);
 
     const clean = letters.trim().toLocaleLowerCase("tr-TR").replace(/[^a-zçğıöşüâîû]/gi, "");
     if (clean.length === 0) return [];
@@ -1472,7 +1534,7 @@ export class TDKClient {
    */
   public async findRhymes(word: string, options?: RhymeOptions): Promise<string[]> {
     if (!word || word.trim() === "") return [];
-    await this.ensureAutocompleteLoaded();
+    await this.ensureAutocompleteLoaded(options?.signal);
 
     const clean = word.trim().toLocaleLowerCase("tr-TR");
     const minLetters = Math.min(options?.minLetters ?? 3, clean.length);
@@ -1500,12 +1562,12 @@ export class TDKClient {
    * 3. Question particle 'mi/mı/mu/mü' erroneously joined to words (e.g. "geldimi" -> "geldi mi")
    * 4. Misspelled words with dictionary suggestions (via edit-distance & morphology)
    */
-  public async proofread(text: string): Promise<ProofreadResult> {
+  public async proofread(text: string, options: RequestOptions = {}): Promise<ProofreadResult> {
     if (!text || text.trim() === "") {
       return { text: text || "", issues: [], isCorrect: true };
     }
 
-    await this.ensureAutocompleteLoaded();
+    await this.ensureAutocompleteLoaded(options.signal);
     const issues: ProofreadIssue[] = [];
 
     const SOMBAHCEMI = new Set([
@@ -1606,8 +1668,8 @@ export class TDKClient {
       if (questionMatch) {
         const base = questionMatch[1];
         const particle = questionMatch[2];
-        if (base.length >= 2 && (await this.isHeadword(base) || (await this.findRoot(base)) !== null)) {
-          if (!(await this.isHeadword(lower))) {
+        if (base.length >= 2 && (await this.isHeadword(base, options) || (await this.findRoot(base, options)) !== null)) {
+          if (!(await this.isHeadword(lower, options))) {
             issues.push({
               type: "question_particle",
               word: rawWord,
@@ -1628,8 +1690,8 @@ export class TDKClient {
       if (!flagged && lower.endsWith("ki") && lower.length > 3) {
         const base = lower.slice(0, -2);
         if (!SOMBAHCEMI.has(lower)) {
-          if (!(await this.isHeadword(lower))) {
-            const root = await this.findRoot(base);
+          if (!(await this.isHeadword(lower, options))) {
+            const root = await this.findRoot(base, options);
             const isVerb =
               (base === "demek" || base === "kaldı" || base === "yeter" || base === "bilmem" || VERB_CONJUGATION_REGEX.test(base)) &&
               (root ? root.endsWith("mek") || root.endsWith("mak") : true);
@@ -1653,8 +1715,8 @@ export class TDKClient {
       if (!flagged && (lower.endsWith("de") || lower.endsWith("da") || lower.endsWith("te") || lower.endsWith("ta")) && lower.length > 3) {
         const base = lower.slice(0, -2);
         const ending = lower.slice(-2);
-        if (!(await this.isHeadword(lower))) {
-          const root = await this.findRoot(base);
+        if (!(await this.isHeadword(lower, options))) {
+          const root = await this.findRoot(base, options);
           const isVerb =
             VERB_CONJUGATION_REGEX.test(base) &&
             (root ? root.endsWith("mek") || root.endsWith("mak") : false);
@@ -1721,7 +1783,7 @@ export class TDKClient {
 
       // 7. General Spell Check
       if (!flagged) {
-        const check = await this.checkSpelling(rawWord);
+        const check = await this.checkSpelling(rawWord, options);
         if (!check.isCorrect) {
           issues.push({
             type: "spelling",

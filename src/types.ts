@@ -150,16 +150,26 @@ export interface ProofreadResult {
   isCorrect: boolean;
 }
 
-export interface PatternSearchOptions {
+/** Per-call options accepted by every method that may hit the network. */
+export interface RequestOptions {
+  /**
+   * Cancels the call: pending requests are aborted and the returned promise
+   * rejects with the signal's reason (e.g. an `AbortError`), even for methods
+   * that otherwise return `null`/`[]` on failure.
+   */
+  signal?: AbortSignal;
+}
+
+export interface PatternSearchOptions extends RequestOptions {
   maxResults?: number;
 }
 
-export interface AnagramOptions {
+export interface AnagramOptions extends RequestOptions {
   exactLength?: boolean;
   maxResults?: number;
 }
 
-export interface RhymeOptions {
+export interface RhymeOptions extends RequestOptions {
   minLetters?: number;
   maxResults?: number;
 }
