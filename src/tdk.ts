@@ -498,13 +498,19 @@ export class TDKClient {
 
   /**
    * Returns the etymological origin of the word, or "Türkçe" if TDK doesn't
-   * record a foreign origin for it. Returns `null` only when the word itself
-   * isn't found in the dictionary at all.
+   * record a foreign origin for it. With `fallbackStem`, an inflected word
+   * that isn't a headword itself ("kitaplarımız") reports its root's origin.
+   * Returns `null` only when neither the word nor its root is found.
    */
-  public async getOrigin(word: string): Promise<string | null> {
+  public async getOrigin(word: string, fallbackStem = false): Promise<string | null> {
     const results = await this.getWord(word);
-    if (results.length === 0) return null;
-    return results[0].lisan || "Türkçe";
+    if (results.length > 0) return results[0].lisan || "Türkçe";
+    if (!fallbackStem) return null;
+
+    const root = await this.findRoot(word);
+    if (!root || root === word.trim().toLocaleLowerCase("tr-TR")) return null;
+    const rootResults = await this.getWord(root);
+    return rootResults.length > 0 ? rootResults[0].lisan || "Türkçe" : null;
   }
 
   /**

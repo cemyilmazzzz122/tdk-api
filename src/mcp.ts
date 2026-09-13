@@ -115,10 +115,16 @@ export function createMcpServer(): McpServer {
   server.tool(
     "tdk_origin",
     "Bir kelimenin TDK'deki köken bilgisini ve yabancı kökenli olup olmadığını döndürür.",
-    { word: z.string().describe("Aranacak Türkçe kelime.") },
-    guard(async ({ word }) => {
-      const [origin, foreign] = await Promise.all([TDK.getOrigin(word), TDK.isForeignWord(word)]);
-      return ok({ word, origin, isForeign: foreign });
+    {
+      word: z.string().describe("Aranacak Türkçe kelime."),
+      fallback_stem: z
+        .boolean()
+        .default(true)
+        .describe("Kelime sözlükte yoksa (çekimli biçim) kökünün kökenine bak."),
+    },
+    guard(async ({ word, fallback_stem }) => {
+      const origin = await TDK.getOrigin(word, fallback_stem);
+      return ok({ word, origin, isForeign: origin === null ? null : origin !== "Türkçe" });
     })
   );
 

@@ -119,7 +119,7 @@ async function startRepl() {
         if (meanings.length === 0) console.log(c.dim("Sonuç bulunamadı."));
         else meanings.forEach((m, i) => console.log(`${i + 1}. ${c.green(m)}`));
       } else if (subCmd === "koken") {
-        const origin = await TDK.getOrigin(subArg);
+        const origin = await TDK.getOrigin(subArg, true);
         console.log(`Köken: ${c.cyan(origin || "Bilinmiyor")}`);
       } else if (subCmd === "hece") {
         const s = TDK.syllabicate(subArg);
@@ -210,8 +210,8 @@ async function run() {
 
       case "koken": {
         if (!word) throw new Error("Kelime belirtmelisiniz.");
-        const origin = await TDK.getOrigin(word);
-        printResult({ word, origin }, () => console.log(`Köken: ${origin}`));
+        const origin = await TDK.getOrigin(word, true);
+        printResult({ word, origin }, () => console.log(`Köken: ${origin ?? "bulunamadı"}`));
         break;
       }
 
