@@ -107,12 +107,26 @@ export class TDK {
     await fs.promises.rm(file, { force: true }).catch(() => {});
   }
 
+  /**
+   * LRU insert: `Map` keeps insertion order, so re-inserting moves a key to
+   * the newest end and the first key is always the least recently used.
+   */
   private static setBoundedCache<K, V>(map: Map<K, V>, key: K, value: V): void {
+    map.delete(key);
     if (map.size >= this.maxCacheSize) {
       const firstKey = map.keys().next().value;
       if (firstKey !== undefined) map.delete(firstKey);
     }
     map.set(key, value);
+  }
+
+  /** LRU read: a hit is moved to the newest end so it is evicted last. */
+  private static getCached<K, V>(map: Map<K, V>, key: K): V | undefined {
+    if (!map.has(key)) return undefined;
+    const value = map.get(key)!;
+    map.delete(key);
+    map.set(key, value);
+    return value;
   }
 
   private static delay(ms: number) {
@@ -169,8 +183,9 @@ export class TDK {
 
     const cleanWord = word.trim().toLocaleLowerCase("tr-TR");
 
-    if (this.isCacheEnabled && this.wordCache.has(cleanWord)) {
-      return this.wordCache.get(cleanWord)!;
+    if (this.isCacheEnabled) {
+      const cached = this.getCached(this.wordCache, cleanWord);
+      if (cached) return cached;
     }
 
     const url = `${this.BASE_URL}/gts?ara=${encodeURIComponent(cleanWord)}`;
@@ -416,9 +431,8 @@ export class TDK {
     if (!word || word.trim() === "") return null;
     const clean = word.trim().toLocaleLowerCase("tr-TR");
 
-    if (this.stemCache.has(clean)) {
-      return this.stemCache.get(clean)!;
-    }
+    const cachedRoot = this.getCached(this.stemCache, clean);
+    if (cachedRoot !== undefined) return cachedRoot;
 
     // 1. If the word itself is an exact headword, it is its own root
     if (await this.isHeadword(clean)) {
