@@ -1,5 +1,5 @@
 const assert = require("node:assert");
-const { TDK } = require("../dist/index.js");
+const { TDK } = require("../../dist/index.js");
 
 async function runTests() {
   console.log("=== Running Grammar & Phonology Unit Tests ===");

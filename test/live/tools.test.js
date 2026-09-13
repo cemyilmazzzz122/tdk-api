@@ -1,5 +1,5 @@
 const assert = require("node:assert");
-const { TDK, TDKClient, createMcpServer, runMcpServer } = require("../dist/index.js");
+const { TDK, TDKClient, createMcpServer, runMcpServer } = require("../../dist/index.js");
 
 async function runTests() {
   console.log("=== Running Linguistic Tools & Client Tests ===");

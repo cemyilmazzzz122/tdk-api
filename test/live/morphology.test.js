@@ -7,7 +7,7 @@ const {
   restoreInfinitive,
   restoreGemination,
   restoreVowelNarrowing,
-} = require("../dist/index.js");
+} = require("../../dist/index.js");
 
 async function runTests() {
   console.log("=== Running Morphology Unit & Integration Tests ===");

@@ -18,7 +18,9 @@
   },
   "scripts": {
     "build": "tsup src/index.ts src/cli.ts --format cjs,esm --dts --clean --shims",
-    "test": "node test/morphology.test.js && node test/grammar.test.js && node test/proofread.test.js && node test/tools.test.js"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/unit/*.test.js",
+    "test:live": "node test/live/sources.test.js && node test/live/morphology.test.js && node test/live/proofread.test.js && node test/live/tools.test.js"
   },
   "keywords": [
     "tdk",
