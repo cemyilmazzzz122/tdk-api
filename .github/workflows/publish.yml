@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+  id-token: write # npm provenance
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -16,6 +20,16 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
 
       - run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      # Offline unit tests: a broken build or regression must never reach npm.
+      - name: Unit tests
+        run: npm test
 
       - name: Check if version changed
         id: version-check
@@ -30,13 +44,9 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build
-        if: steps.version-check.outputs.changed == 'true'
-        run: npm run build
-
       - name: Publish
         if: steps.version-check.outputs.changed == 'true'
-        run: npm publish
+        run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
