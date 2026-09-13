@@ -16,6 +16,7 @@ import type {
   AnagramOptions,
   RhymeOptions,
   RequestOptions,
+  SuggestionOptions,
   TDKConfig,
 } from "./types";
 import { TDKError, TDKValidationError, TDKNetworkError, TDKParseError } from "./errors";
@@ -497,9 +498,9 @@ export class TDKClient {
    * Returns `[]` until the list is loaded — call `preloadHeadwords()` (or any
    * async headword method) first, or use `getSuggestions()`.
    */
-  public getInstantSuggestions(prefix: string, limit = 10): string[] {
+  public getInstantSuggestions(prefix: string, limit = 10, options: SuggestionOptions = {}): string[] {
     if (!prefix || prefix.trim() === "") return [];
-    return this.headwords.search(prefix, limit);
+    return this.headwords.search(prefix, limit, options.foldDiacritics);
   }
 
   /**
@@ -508,11 +509,15 @@ export class TDKClient {
    * and cached once per process regardless of `enableCache()` — the same
    * caching behavior as before — and only cleared by `clearCache()`.
    */
-  public async getSuggestions(prefix: string, limit = 10, options: RequestOptions = {}): Promise<string[]> {
+  public async getSuggestions(
+    prefix: string,
+    limit = 10,
+    options: SuggestionOptions & RequestOptions = {}
+  ): Promise<string[]> {
     if (!prefix || prefix.trim() === "") return [];
 
     await this.ensureAutocompleteLoaded(options.signal);
-    return this.getInstantSuggestions(prefix, limit);
+    return this.getInstantSuggestions(prefix, limit, options);
   }
 
   /**

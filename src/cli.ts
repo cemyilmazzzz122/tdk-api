@@ -131,7 +131,7 @@ async function startRepl() {
         const h = TDK.checkLabialHarmony(subArg);
         console.log(`Küçük Ünlü Uyumu: ${h ? c.green("Uyar") : c.red("Uymaz")}`);
       } else if (subCmd === "oneri") {
-        const suggestions = await TDK.getSuggestions(subArg);
+        const suggestions = await TDK.getSuggestions(subArg, 10, { foldDiacritics: true });
         console.log(suggestions.length === 0 ? c.dim("Öneri bulunamadı.") : suggestions.map((s) => c.cyan(s)).join(", "));
       } else if (subCmd === "bulmaca" || subCmd === "pattern") {
         const matches = await TDK.patternSearch(subArg);
@@ -424,7 +424,7 @@ async function run() {
 
       case "oneri": {
         if (!word) throw new Error("Önek belirtmelisiniz.");
-        const suggestions = await TDK.getSuggestions(word);
+        const suggestions = await TDK.getSuggestions(word, 10, { foldDiacritics: true });
         printResult(suggestions, () => {
           if (suggestions.length === 0) {
             console.log("Öneri bulunamadı.");

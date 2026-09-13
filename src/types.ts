@@ -162,6 +162,15 @@ export interface RequestOptions {
   signal?: AbortSignal;
 }
 
+export interface SuggestionOptions {
+  /**
+   * When fewer than `limit` headwords start with the exact prefix, fill the
+   * rest with headwords that match once Turkish letters and circumflexes are
+   * ignored ("kagit" → "kâğıt", "sogan" → "soğan"). Default: false.
+   */
+  foldDiacritics?: boolean;
+}
+
 export interface PatternSearchOptions extends RequestOptions {
   maxResults?: number;
 }

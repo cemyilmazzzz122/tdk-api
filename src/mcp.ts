@@ -232,9 +232,16 @@ export function createMcpServer(): McpServer {
     {
       prefix: z.string().describe("Aranacak önek (örn: 'kalem')."),
       max_results: z.number().int().min(1).max(100).default(10).describe("En fazla sonuç sayısı."),
+      fold_diacritics: z
+        .boolean()
+        .default(true)
+        .describe("Birebir önek eşleşmesi az kalırsa Türkçe harf/şapka farkını yok sayan eşleşmelerle tamamla (örn: 'kagit' -> 'kâğıt')."),
     },
-    guard(async ({ prefix, max_results }) =>
-      ok({ prefix, suggestions: await TDK.getSuggestions(prefix, max_results) })
+    guard(async ({ prefix, max_results, fold_diacritics }) =>
+      ok({
+        prefix,
+        suggestions: await TDK.getSuggestions(prefix, max_results, { foldDiacritics: fold_diacritics }),
+      })
     )
   );
 
