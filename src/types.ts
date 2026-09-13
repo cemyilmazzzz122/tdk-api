@@ -169,6 +169,16 @@ export interface TDKConfig {
   retries?: number;
   cache?: boolean;
   maxCacheSize?: number;
+  /**
+   * Persists TDK's ~81k headword list to disk so later processes start with
+   * instant local autocomplete instead of re-downloading it (default: false).
+   */
+  diskCache?: boolean;
+  /**
+   * Directory for the headword disk cache (default: `$XDG_CACHE_HOME/tdk-api-wrapper`,
+   * `~/.cache/tdk-api-wrapper`, or `%LOCALAPPDATA%\tdk-api-wrapper` on Windows).
+   */
+  diskCacheDir?: string;
 }
 
 export interface KubbealtiEntry {

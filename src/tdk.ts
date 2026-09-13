@@ -23,6 +23,7 @@ import { COMMON_MISSPELLINGS, SEY_EXCEPTIONS } from "./data/misspellings";
 import { KUBBEALTI_EXTRA_CA } from "./data/kubbealti-ca";
 import { damerauLevenshtein, keyboardAwareDistance } from "./lib/edit-distance";
 import { htmlToPlainText } from "./lib/html";
+import { buildPrefixIndex, searchPrefix, type PrefixIndex } from "./lib/prefix-index";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -50,7 +51,15 @@ export class TDK {
   private static dailyContentCache: DailyContent | null = null;
   private static autocompleteCache: string[] = [];
   private static autocompleteSet: Set<string> = new Set<string>();
+  private static autocompleteIndex: PrefixIndex | null = null;
+  private static autocompleteLoad: Promise<void> | null = null;
+  private static autocompleteGeneration = 0;
   private static stemCache = new Map<string, string | null>();
+
+  // Headword disk cache (opt-in)
+  private static readonly HEADWORD_DISK_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+  private static diskCacheEnabled = false;
+  private static diskCacheDir: string | null = null;
 
   /**
    * Configures global client options such as network timeout, retries, and cache size.
@@ -60,6 +69,8 @@ export class TDK {
     if (config.retries !== undefined) this.defaultRetries = Math.max(0, config.retries);
     if (config.cache !== undefined) this.enableCache(config.cache);
     if (config.maxCacheSize !== undefined) this.maxCacheSize = Math.max(10, config.maxCacheSize);
+    if (config.diskCache !== undefined) this.diskCacheEnabled = config.diskCache;
+    if (config.diskCacheDir !== undefined) this.diskCacheDir = config.diskCacheDir;
   }
 
   /**
@@ -80,7 +91,20 @@ export class TDK {
     this.dailyContentCache = null;
     this.autocompleteCache = [];
     this.autocompleteSet.clear();
+    this.autocompleteIndex = null;
+    this.autocompleteLoad = null;
+    this.autocompleteGeneration++;
     this.stemCache.clear();
+  }
+
+  /**
+   * Deletes the on-disk headword cache written when `diskCache` is enabled.
+   * `clearCache()` only clears memory, so use this to force a fresh download.
+   */
+  public static async clearDiskCache(): Promise<void> {
+    const file = this.headwordDiskCachePath();
+    if (!file) return;
+    await fs.promises.rm(file, { force: true }).catch(() => {});
   }
 
   private static setBoundedCache<K, V>(map: Map<K, V>, key: K, value: V): void {
@@ -243,16 +267,102 @@ export class TDK {
     }
   }
 
+  private static headwordDiskCachePath(): string | null {
+    if (!this.diskCacheEnabled) return null;
+    const dir =
+      this.diskCacheDir ??
+      (process.platform === "win32" && process.env.LOCALAPPDATA
+        ? path.join(process.env.LOCALAPPDATA, "tdk-api-wrapper")
+        : path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache"), "tdk-api-wrapper"));
+    return path.join(dir, "headwords.json");
+  }
+
+  private static async readHeadwordDiskCache(): Promise<{ savedAt: number; words: string[] } | null> {
+    const file = this.headwordDiskCachePath();
+    if (!file) return null;
+    try {
+      const data = JSON.parse(await fs.promises.readFile(file, "utf8"));
+      if (typeof data?.savedAt !== "number" || !Array.isArray(data.words) || data.words.length === 0) {
+        return null;
+      }
+      return { savedAt: data.savedAt, words: data.words.filter((w: unknown) => typeof w === "string") };
+    } catch {
+      return null;
+    }
+  }
+
+  private static async writeHeadwordDiskCache(words: string[]): Promise<void> {
+    const file = this.headwordDiskCachePath();
+    if (!file) return;
+    const tmp = `${file}.${process.pid}.tmp`;
+    try {
+      await fs.promises.mkdir(path.dirname(file), { recursive: true });
+      await fs.promises.writeFile(tmp, JSON.stringify({ savedAt: Date.now(), words }));
+      await fs.promises.rename(tmp, file);
+    } catch {
+      await fs.promises.rm(tmp, { force: true }).catch(() => {});
+    }
+  }
+
+  /**
+   * Resolves the headword list through its cache tiers: a fresh disk copy
+   * (when `diskCache` is enabled), then the network, then a stale disk copy
+   * if the network scrape fails.
+   */
+  private static async loadHeadwords(): Promise<string[]> {
+    const disk = await this.readHeadwordDiskCache();
+    if (disk && Date.now() - disk.savedAt < this.HEADWORD_DISK_TTL_MS) return disk.words;
+
+    const fresh = await this.fetchAutocompleteData();
+    if (fresh.length > 0) {
+      await this.writeHeadwordDiskCache(fresh);
+      return fresh;
+    }
+    return disk?.words ?? [];
+  }
+
   /**
    * Ensures TDK's ~81k headword list is loaded in memory for fast O(1) set operations.
+   * Concurrent callers share one in-flight load; a failed (empty) load is retried
+   * on the next call.
    */
-  private static async ensureAutocompleteLoaded(): Promise<void> {
-    if (this.autocompleteCache.length === 0) {
-      this.autocompleteCache = await this.fetchAutocompleteData();
-      this.autocompleteSet = new Set(
-        this.autocompleteCache.map((w) => w.toLocaleLowerCase("tr-TR"))
-      );
+  private static ensureAutocompleteLoaded(): Promise<void> {
+    if (this.autocompleteCache.length > 0) return Promise.resolve();
+    if (!this.autocompleteLoad) {
+      const generation = this.autocompleteGeneration;
+      this.autocompleteLoad = this.loadHeadwords()
+        .then((words) => {
+          if (generation !== this.autocompleteGeneration) return;
+          this.autocompleteCache = words;
+          this.autocompleteSet = new Set(words.map((w) => w.toLocaleLowerCase("tr-TR")));
+          this.autocompleteIndex = null;
+        })
+        .finally(() => {
+          if (generation === this.autocompleteGeneration) this.autocompleteLoad = null;
+        });
     }
+    return this.autocompleteLoad;
+  }
+
+  /**
+   * Loads TDK's headword list ahead of time (e.g. at process start) so later
+   * `getInstantSuggestions()` calls hit memory. Resolves to whether it loaded.
+   */
+  public static async preloadHeadwords(): Promise<boolean> {
+    await this.ensureAutocompleteLoaded();
+    return this.autocompleteCache.length > 0;
+  }
+
+  /**
+   * Synchronous autocomplete over the in-memory headword list: a binary search
+   * on a Turkish-alphabet-sorted prefix index, so it runs in microseconds.
+   * Returns `[]` until the list is loaded — call `preloadHeadwords()` (or any
+   * async headword method) first, or use `getSuggestions()`.
+   */
+  public static getInstantSuggestions(prefix: string, limit = 10): string[] {
+    if (!prefix || prefix.trim() === "" || this.autocompleteCache.length === 0) return [];
+    this.autocompleteIndex ??= buildPrefixIndex(this.autocompleteCache);
+    return searchPrefix(this.autocompleteIndex, prefix, limit);
   }
 
   /**
@@ -261,15 +371,11 @@ export class TDK {
    * and cached once per process regardless of `enableCache()` — the same
    * caching behavior as before — and only cleared by `clearCache()`.
    */
-  public static async getSuggestions(prefix: string): Promise<string[]> {
+  public static async getSuggestions(prefix: string, limit = 10): Promise<string[]> {
     if (!prefix || prefix.trim() === "") return [];
 
     await this.ensureAutocompleteLoaded();
-
-    const cleanPrefix = prefix.trim().toLocaleLowerCase("tr-TR");
-    return this.autocompleteCache
-      .filter(w => w.toLocaleLowerCase("tr-TR").startsWith(cleanPrefix))
-      .slice(0, 10);
+    return this.getInstantSuggestions(prefix, limit);
   }
 
   /**
@@ -619,9 +725,7 @@ export class TDK {
     }
 
     // 6. Check if headwords with spaces match when space is removed (e.g. "ön yargı" for "önyargı")
-    if (this.autocompleteCache.length === 0) {
-      this.autocompleteCache = await this.fetchAutocompleteData();
-    }
+    await this.ensureAutocompleteLoaded();
     for (const candidate of this.autocompleteCache) {
       if (candidate.includes(" ")) {
         const candidateNoSpace = candidate.replace(/\s+/g, "").toLocaleLowerCase("tr-TR");
@@ -1660,6 +1764,18 @@ export class TDKClient {
 
   public findRoot(word: string): Promise<string | null> {
     return TDK.findRoot(word);
+  }
+
+  public getSuggestions(prefix: string, limit?: number): Promise<string[]> {
+    return TDK.getSuggestions(prefix, limit);
+  }
+
+  public getInstantSuggestions(prefix: string, limit?: number): string[] {
+    return TDK.getInstantSuggestions(prefix, limit);
+  }
+
+  public preloadHeadwords(): Promise<boolean> {
+    return TDK.preloadHeadwords();
   }
 
   public stem(word: string): Promise<StemResult | null> {
