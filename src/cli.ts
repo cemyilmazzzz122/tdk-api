@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { TDK } from "./tdk";
+import { VERSION } from "./version";
 
 const rawArgs = process.argv.slice(2);
 const jsonMode = rawArgs.includes("--json");
@@ -177,7 +178,7 @@ async function run() {
   }
 
   if (command === "--version" || command === "-v") {
-    console.log("tdk-api-wrapper v1.8.0");
+    console.log(`tdk-api-wrapper v${VERSION}`);
     process.exit(0);
   }
 

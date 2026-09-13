@@ -1,9 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { TDK } from "./tdk";
-
-const VERSION = "1.8.0";
+import { TDK, TDKClient } from "./tdk";
+import { VERSION } from "./version";
 
 type ToolResult = {
   content: { type: "text"; text: string }[];
@@ -34,15 +33,21 @@ function guard<A>(fn: (args: A) => Promise<ToolResult>) {
   };
 }
 
+export interface McpServerOptions {
+  /** Client whose configuration and caches the tools use (default: the shared `TDK` instance). */
+  client?: TDKClient;
+}
+
 /**
- * Builds the TDK MCP server: every meaningful `TDK` static method is surfaced
+ * Builds the TDK MCP server: every meaningful `TDKClient` method is surfaced
  * as a Model Context Protocol tool so an LLM client (Claude Desktop, Cursor,
  * Antigravity, …) can query Turkish dictionary, morphology, spelling and
  * etymology data directly. All tools return JSON text; network/scraping
  * failures come back as `{ "error": ... }` with `isError: true` rather than
  * throwing.
  */
-export function createMcpServer(): McpServer {
+export function createMcpServer(options: McpServerOptions = {}): McpServer {
+  const tdk = options.client ?? TDK;
   const server = new McpServer({
     name: "TDK API Server",
     version: VERSION,
@@ -55,7 +60,7 @@ export function createMcpServer(): McpServer {
     "Bir kelimenin TDK Güncel Türkçe Sözlük'teki ham kaydını (tüm anlamlar, örnekler, birleşikler, köken, atasözleri) döndürür.",
     { word: z.string().describe("Aranacak Türkçe kelime (örn: 'kalem').") },
     guard(async ({ word }) => {
-      const results = await TDK.getWord(word);
+      const results = await tdk.getWord(word);
       if (results.length === 0) return fail(`"${word}" TDK sözlüğünde bulunamadı.`);
       return ok(results);
     })
@@ -65,49 +70,49 @@ export function createMcpServer(): McpServer {
     "tdk_meanings",
     "Bir kelimenin sadeleştirilmiş anlam listesini (madde madde tanımlar) döndürür.",
     { word: z.string().describe("Aranacak Türkçe kelime.") },
-    guard(async ({ word }) => ok({ word, meanings: await TDK.getMeanings(word) }))
+    guard(async ({ word }) => ok({ word, meanings: await tdk.getMeanings(word) }))
   );
 
   server.tool(
     "tdk_examples",
     "Bir kelimenin sözlükteki örnek cümlelerini (varsa yazarıyla) döndürür.",
     { word: z.string().describe("Aranacak Türkçe kelime.") },
-    guard(async ({ word }) => ok({ word, examples: await TDK.getExamples(word) }))
+    guard(async ({ word }) => ok({ word, examples: await tdk.getExamples(word) }))
   );
 
   server.tool(
     "tdk_proverbs",
     "Bir kelime ile kurulan atasözü ve deyimleri listeler.",
     { word: z.string().describe("Aranacak Türkçe kelime (örn: 'göz').") },
-    guard(async ({ word }) => ok({ word, proverbs: await TDK.getProverbs(word) }))
+    guard(async ({ word }) => ok({ word, proverbs: await tdk.getProverbs(word) }))
   );
 
   server.tool(
     "tdk_compound_words",
     "Bir kelime ile oluşturulmuş birleşik kelimeleri listeler (örn: 'kalem' -> 'dolma kalem').",
     { word: z.string().describe("Aranacak Türkçe kelime.") },
-    guard(async ({ word }) => ok({ word, compounds: await TDK.getCompoundWords(word) }))
+    guard(async ({ word }) => ok({ word, compounds: await tdk.getCompoundWords(word) }))
   );
 
   server.tool(
     "tdk_part_of_speech",
     "Bir kelimenin sözcük türlerini (isim, sıfat, zarf, fiil vb.) döndürür.",
     { word: z.string().describe("Aranacak Türkçe kelime.") },
-    guard(async ({ word }) => ok({ word, partsOfSpeech: await TDK.getPartOfSpeech(word) }))
+    guard(async ({ word }) => ok({ word, partsOfSpeech: await tdk.getPartOfSpeech(word) }))
   );
 
   server.tool(
     "tdk_synonyms",
     "Bir kelimenin eş anlamlılarını (yakın anlamlı kelimeler) döndürür.",
     { word: z.string().describe("Aranacak Türkçe kelime.") },
-    guard(async ({ word }) => ok({ word, synonyms: await TDK.getSynonyms(word) }))
+    guard(async ({ word }) => ok({ word, synonyms: await tdk.getSynonyms(word) }))
   );
 
   server.tool(
     "tdk_antonyms",
     "Bir kelimenin zıt (karşıt) anlamlılarını döndürür.",
     { word: z.string().describe("Aranacak Türkçe kelime.") },
-    guard(async ({ word }) => ok({ word, antonyms: await TDK.getAntonyms(word) }))
+    guard(async ({ word }) => ok({ word, antonyms: await tdk.getAntonyms(word) }))
   );
 
   // --- Etymology ----------------------------------------------------------
@@ -123,7 +128,7 @@ export function createMcpServer(): McpServer {
         .describe("Kelime sözlükte yoksa (çekimli biçim) kökünün kökenine bak."),
     },
     guard(async ({ word, fallback_stem }) => {
-      const origin = await TDK.getOrigin(word, fallback_stem);
+      const origin = await tdk.getOrigin(word, fallback_stem);
       return ok({ word, origin, isForeign: origin === null ? null : origin !== "Türkçe" });
     })
   );
@@ -133,7 +138,7 @@ export function createMcpServer(): McpServer {
     "Nişanyan Sözlük'ten bir kelimenin ayrıntılı etimolojisini (server-rendered meta açıklaması) çeker.",
     { word: z.string().describe("Etimolojisi aranacak kelime.") },
     guard(async ({ word }) => {
-      const etymology = await TDK.getNisanyan(word);
+      const etymology = await tdk.getNisanyan(word);
       return etymology ? ok({ word, etymology }) : fail(`Nişanyan Sözlük'te "${word}" bulunamadı.`);
     })
   );
@@ -143,7 +148,7 @@ export function createMcpServer(): McpServer {
     "Kubbealtı Lugatı'ndan (ticari sözlük) bir kelimenin anlamlarını çeker.",
     { word: z.string().describe("Aranacak kelime.") },
     guard(async ({ word }) => {
-      const meanings = await TDK.getKubbealtiMeanings(word);
+      const meanings = await tdk.getKubbealtiMeanings(word);
       if (meanings === null) return fail("Kubbealtı Lugatı'na ulaşılamadı.");
       return ok({ word, meanings });
     })
@@ -161,12 +166,12 @@ export function createMcpServer(): McpServer {
     },
     guard(async ({ word, section }) => {
       if (section) {
-        const text = await TDK.getWiktionarySection(word, section);
+        const text = await tdk.getWiktionarySection(word, section);
         return text
           ? ok({ word, section, text })
           : fail(`Wiktionary'de "${word}" için "${section}" bölümü bulunamadı.`);
       }
-      const entry = await TDK.getWiktionary(word);
+      const entry = await tdk.getWiktionary(word);
       return entry ? ok(entry) : fail(`Wiktionary'de "${word}" bulunamadı.`);
     })
   );
@@ -177,14 +182,14 @@ export function createMcpServer(): McpServer {
     "tdk_spell_check",
     "Bir kelimenin doğru yazılıp yazılmadığını denetler; yanlışsa klavye/diakritik farkındalıklı en yakın madde önerisi verir, çekimli biçimse kökünü döndürür.",
     { word: z.string().describe("Yazımı denetlenecek kelime (örn: 'yanlız', 'arabs').") },
-    guard(async ({ word }) => ok(await TDK.checkSpelling(word)))
+    guard(async ({ word }) => ok(await tdk.checkSpelling(word)))
   );
 
   server.tool(
     "tdk_proofread",
     "Bir Türkçe metni imla, ayrı/bitişik yazım ve 'da/de', 'ki', 'mi' bağlaç/ek hataları açısından denetler.",
     { text: z.string().describe("Denetlenecek Türkçe metin.") },
-    guard(async ({ text }) => ok(await TDK.proofread(text)))
+    guard(async ({ text }) => ok(await tdk.proofread(text)))
   );
 
   server.tool(
@@ -192,7 +197,7 @@ export function createMcpServer(): McpServer {
     "Bir kelimenin morfolojik kökünü (ek sıyırma / stemming) bulur ve çekimli olup olmadığını belirtir (örn: 'kitabımızın' -> 'kitap').",
     { word: z.string().describe("Kökü aranacak kelime.") },
     guard(async ({ word }) => {
-      const result = await TDK.stem(word);
+      const result = await tdk.stem(word);
       return result ? ok(result) : fail(`"${word}" için kök tespit edilemedi.`);
     })
   );
@@ -201,14 +206,14 @@ export function createMcpServer(): McpServer {
     "tdk_analyze_text",
     "Bir metindeki her kelime için kök, anlam ve köken bilgisini toplu olarak çıkarır.",
     { text: z.string().describe("Analiz edilecek Türkçe metin.") },
-    guard(async ({ text }) => ok(await TDK.analyzeText(text)))
+    guard(async ({ text }) => ok(await tdk.analyzeText(text)))
   );
 
   server.tool(
     "tdk_syllables",
     "Bir kelimeyi Türkçe hece kurallarına göre hecelere ayırır (tamamen yerel, ağ isteği yok).",
     { word: z.string().describe("Hecelenecek kelime.") },
-    guard(async ({ word }) => ok({ word, syllables: TDK.syllabicate(word) }))
+    guard(async ({ word }) => ok({ word, syllables: tdk.syllabicate(word) }))
   );
 
   server.tool(
@@ -218,8 +223,8 @@ export function createMcpServer(): McpServer {
     guard(async ({ word }) =>
       ok({
         word,
-        vowelHarmony: TDK.checkVowelHarmony(word),
-        labialHarmony: TDK.checkLabialHarmony(word),
+        vowelHarmony: tdk.checkVowelHarmony(word),
+        labialHarmony: tdk.checkLabialHarmony(word),
       })
     )
   );
@@ -240,7 +245,7 @@ export function createMcpServer(): McpServer {
     guard(async ({ prefix, max_results, fold_diacritics }) =>
       ok({
         prefix,
-        suggestions: await TDK.getSuggestions(prefix, max_results, { foldDiacritics: fold_diacritics }),
+        suggestions: await tdk.getSuggestions(prefix, max_results, { foldDiacritics: fold_diacritics }),
       })
     )
   );
@@ -253,7 +258,7 @@ export function createMcpServer(): McpServer {
       max_results: z.number().int().min(1).max(500).default(50).describe("En fazla sonuç sayısı."),
     },
     guard(async ({ pattern, max_results }) => {
-      const matches = await TDK.patternSearch(pattern, { maxResults: max_results });
+      const matches = await tdk.patternSearch(pattern, { maxResults: max_results });
       return ok({ pattern, count: matches.length, matches });
     })
   );
@@ -267,7 +272,7 @@ export function createMcpServer(): McpServer {
       max_results: z.number().int().min(1).max(500).default(50).describe("En fazla sonuç sayısı."),
     },
     guard(async ({ letters, exact_length, max_results }) => {
-      const words = await TDK.findAnagrams(letters, { exactLength: exact_length, maxResults: max_results });
+      const words = await tdk.findAnagrams(letters, { exactLength: exact_length, maxResults: max_results });
       return ok({ letters, count: words.length, words });
     })
   );
@@ -281,7 +286,7 @@ export function createMcpServer(): McpServer {
       max_results: z.number().int().min(1).max(500).default(50).describe("En fazla sonuç sayısı."),
     },
     guard(async ({ word, min_letters, max_results }) => {
-      const rhymes = await TDK.findRhymes(word, { minLetters: min_letters, maxResults: max_results });
+      const rhymes = await tdk.findRhymes(word, { minLetters: min_letters, maxResults: max_results });
       return ok({ word, count: rhymes.length, rhymes });
     })
   );
@@ -293,14 +298,14 @@ export function createMcpServer(): McpServer {
       a: z.string().describe("Birinci kelime."),
       b: z.string().describe("İkinci kelime."),
     },
-    guard(async ({ a, b }) => ok(await TDK.compareWords(a, b)))
+    guard(async ({ a, b }) => ok(await tdk.compareWords(a, b)))
   );
 
   server.tool(
     "tdk_audio_url",
     "Bir kelimenin TDK seslendirme (.wav) URL'sini döndürür (bulunamazsa null).",
     { word: z.string().describe("Seslendirmesi aranacak kelime.") },
-    guard(async ({ word }) => ok({ word, audioUrl: await TDK.getAudioUrl(word) }))
+    guard(async ({ word }) => ok({ word, audioUrl: await tdk.getAudioUrl(word) }))
   );
 
   // --- Daily / reference content --------------------------------------
@@ -310,7 +315,7 @@ export function createMcpServer(): McpServer {
     "TDK'nin 'günün kelimesi'ni anlamlarıyla döndürür.",
     {},
     guard(async () => {
-      const wotd = await TDK.getWordOfTheDay();
+      const wotd = await tdk.getWordOfTheDay();
       return wotd ? ok(wotd) : fail("Günün kelimesi alınamadı.");
     })
   );
@@ -320,7 +325,7 @@ export function createMcpServer(): McpServer {
     "TDK içeriğinden rastgele bir kelime ya da atasözü döndürür.",
     {},
     guard(async () => {
-      const pick = await TDK.getRandomWord();
+      const pick = await tdk.getRandomWord();
       return pick ? ok(pick) : fail("Rastgele içerik alınamadı.");
     })
   );
@@ -333,10 +338,10 @@ export function createMcpServer(): McpServer {
     },
     guard(async ({ name }) => {
       if (name) {
-        const rule = await TDK.getRule(name);
+        const rule = await tdk.getRule(name);
         return rule ? ok({ name, rule }) : fail(`"${name}" kuralı bulunamadı.`);
       }
-      const rules = await TDK.getKurallar();
+      const rules = await tdk.getKurallar();
       return ok({ count: rules.length, rules });
     })
   );
@@ -346,13 +351,14 @@ export function createMcpServer(): McpServer {
 
 /** Starts the TDK MCP server over stdio (used by the `tdk mcp` CLI command). */
 export async function runMcpServer(): Promise<void> {
-  // Standalone server: persist the headword list on disk (opt out with TDK_DISK_CACHE=0)
-  // and warm it in the background so headword tools answer instantly. Strict mode makes
-  // tools report "source unreachable" as an error instead of an empty result.
-  TDK.configure({ diskCache: process.env.TDK_DISK_CACHE !== "0", strict: true });
-  TDK.preloadHeadwords().catch(() => {});
+  // Standalone server with its own client: persist the headword list and lookups on disk
+  // (opt out with TDK_DISK_CACHE=0) and warm the list in the background so headword tools
+  // answer instantly. Strict mode makes tools report "source unreachable" as an error
+  // instead of an empty result.
+  const client = new TDKClient({ diskCache: process.env.TDK_DISK_CACHE !== "0", strict: true });
+  client.preloadHeadwords().catch(() => {});
 
-  const server = createMcpServer();
+  const server = createMcpServer({ client });
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

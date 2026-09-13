@@ -14,10 +14,22 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "require": "./dist/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp.d.ts",
+      "import": "./dist/mcp.mjs",
+      "require": "./dist/mcp.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "mcp": [
+        "./dist/mcp.d.ts"
+      ]
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts src/cli.ts --format cjs,esm --dts --clean --shims",
+    "build": "tsup",
     "typecheck": "tsc --noEmit",
     "test": "node --test test/unit/*.test.js",
     "test:live": "node test/live/sources.test.js && node test/live/morphology.test.js && node test/live/proofread.test.js && node test/live/tools.test.js"
