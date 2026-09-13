@@ -27,6 +27,46 @@ async function runTests() {
   assert(r1.includes("sonbahar") || r1.includes("ilkbahar") || r1.includes("buhar"));
   console.log("  ✓ findRhymes passed.");
 
+  // 3b. Instant autocomplete & headword disk cache
+  console.log("3b. Testing getSuggestions / getInstantSuggestions / disk cache...");
+  const s1 = await TDK.getSuggestions("Kal");
+  assert.strictEqual(s1.length, 10, "getSuggestions defaults to 10 results");
+  assert(s1.every((w) => w.toLocaleLowerCase("tr-TR").startsWith("kal")), "suggestions must match prefix case-insensitively");
+  assert.deepStrictEqual(TDK.getInstantSuggestions("kal"), s1, "instant suggestions must match async ones");
+  assert.strictEqual(TDK.getInstantSuggestions("kal", 3).length, 3, "limit must be respected");
+
+  // Turkish alphabet order: 'kaç...' sorts after 'kac...' and before 'kad...'
+  const kac = TDK.getInstantSuggestions("kaç", 5);
+  assert(kac.length > 0 && kac.every((w) => w.startsWith("kaç")), "must find headwords starting with kaç");
+  const s2 = await TDK.getSuggestions("ş", 50);
+  assert(s2.length === 50 && s2.every((w) => w.toLocaleLowerCase("tr-TR").startsWith("ş")), "ş prefix must not match s");
+  assert.deepStrictEqual(TDK.getInstantSuggestions("İstanbul"), TDK.getInstantSuggestions("istanbul"), "dotted İ must lowercase to i");
+
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "tdk-headwords-"));
+  TDK.configure({ diskCache: true, diskCacheDir: cacheDir });
+  TDK.clearCache();
+  assert.deepStrictEqual(TDK.getInstantSuggestions("kal"), [], "instant suggestions are empty before loading");
+  const [loadA, loadB] = await Promise.all([TDK.preloadHeadwords(), TDK.preloadHeadwords()]);
+  assert(loadA && loadB, "concurrent preloads must both succeed");
+  assert(fs.existsSync(path.join(cacheDir, "headwords.json")), "headword list must be written to disk");
+
+  TDK.clearCache();
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = () => Promise.reject(new Error("network disabled"));
+  try {
+    assert.deepStrictEqual(await TDK.getSuggestions("kal"), s1, "disk tier must serve suggestions without network");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  await TDK.clearDiskCache();
+  assert(!fs.existsSync(path.join(cacheDir, "headwords.json")), "clearDiskCache must remove the file");
+  TDK.configure({ diskCache: false });
+  fs.rmSync(cacheDir, { recursive: true, force: true });
+  console.log("  ✓ instant autocomplete passed.");
+
   // 4. Configuration & TDKClient
   console.log("4. Testing TDK.configure and TDKClient...");
   TDK.configure({ timeoutMs: 10000, retries: 2, maxCacheSize: 500 });
@@ -39,6 +79,8 @@ async function runTests() {
   assert.strictEqual(typeof client.patternSearch, "function");
   assert.strictEqual(typeof client.findAnagrams, "function");
   assert.strictEqual(typeof client.findRhymes, "function");
+  assert.strictEqual(typeof client.getInstantSuggestions, "function");
+  assert.strictEqual(typeof client.preloadHeadwords, "function");
   assert.strictEqual(typeof client.checkLabialHarmony, "function");
   console.log("  ✓ TDKClient passed.");
 
