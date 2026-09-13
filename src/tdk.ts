@@ -18,7 +18,7 @@ import type {
   RequestOptions,
   TDKConfig,
 } from "./types";
-import { TDKValidationError, TDKNetworkError } from "./errors";
+import { TDKError, TDKValidationError, TDKNetworkError, TDKParseError } from "./errors";
 import { linkedTimeoutSignal, raceAbort } from "./lib/abort";
 import { getStemCandidates } from "./morphology";
 import { COMMON_MISSPELLINGS, SEY_EXCEPTIONS } from "./data/misspellings";
@@ -51,6 +51,16 @@ interface HttpResponse {
 
 function isOk(res: HttpResponse): boolean {
   return res.status >= 200 && res.status < 300;
+}
+
+function httpError(source: string, res: HttpResponse): TDKNetworkError {
+  return new TDKNetworkError(`${source}: HTTP ${res.status}.`, { status: res.status });
+}
+
+function toTDKError(error: unknown): TDKError {
+  if (error instanceof TDKError) return error;
+  if (error instanceof SyntaxError) return new TDKParseError(`Invalid JSON response: ${error.message}`, { cause: error });
+  return new TDKNetworkError(error instanceof Error ? error.message : String(error), { cause: error });
 }
 
 const TURKISH_DEASCII_MAP: Record<string, string[]> = {
@@ -95,6 +105,10 @@ export class TDKClient {
   private diskCacheEnabled = false;
   private diskCacheDir: string | null = null;
 
+  // Failure reporting
+  private strict = false;
+  private onError: ((error: TDKError) => void) | null = null;
+
   constructor(config?: TDKConfig) {
     if (config) this.configure(config);
   }
@@ -109,6 +123,8 @@ export class TDKClient {
     if (config.maxCacheSize !== undefined) this.maxCacheSize = Math.max(10, config.maxCacheSize);
     if (config.diskCache !== undefined) this.diskCacheEnabled = config.diskCache;
     if (config.diskCacheDir !== undefined) this.diskCacheDir = config.diskCacheDir;
+    if (config.strict !== undefined) this.strict = config.strict;
+    if (config.onError !== undefined) this.onError = config.onError;
   }
 
   /**
@@ -182,10 +198,24 @@ export class TDKClient {
   /**
    * Handles a failure inside a method that degrades to `null`/`[]` instead of
    * throwing. A caller-initiated abort is always rethrown, so cancellation
-   * propagates even through these fail-silent methods.
+   * propagates even through these fail-silent methods. Otherwise the failure
+   * is thrown in strict mode (`strict` overrides the client setting for
+   * auxiliary lookups that must never fail their caller) or reported.
    */
-  private softFail(_error: unknown, signal?: AbortSignal): void {
+  private softFail(error: unknown, signal?: AbortSignal, strict = this.strict): void {
     if (signal?.aborted) throw signal.reason;
+    const tdkError = toTDKError(error);
+    if (strict) throw tdkError;
+    this.reportError(tdkError);
+  }
+
+  private reportError(error: TDKError): void {
+    if (process.env.TDK_DEBUG) console.error(`[tdk-api-wrapper] ${error.name}: ${error.message}`);
+    try {
+      this.onError?.(error);
+    } catch {
+      // A throwing hook must not turn a handled failure into a crash.
+    }
   }
 
   private fetchOnce(url: string, headers: Record<string, string>, signal: AbortSignal): Promise<HttpResponse> {
@@ -331,35 +361,32 @@ export class TDKClient {
    * page to find that asset's current hashed filename, downloads it (a few
    * MB, only once per process), and extracts the literal out of it. Fragile
    * scraping of an implementation detail — if TDK's build stops embedding
-   * this, this fails closed to `[]` rather than throwing. It takes no caller
-   * signal: the load is shared, so one caller's abort must not cancel it.
+   * this, this throws a `TDKParseError` that callers turn into `[]` (or
+   * rethrow in strict mode). It takes no caller signal: the load is shared,
+   * so one caller's abort must not cancel it.
    */
   private async fetchAutocompleteData(): Promise<string[]> {
-    try {
-      const home = await this.request(`${BASE_URL}/`);
-      if (!isOk(home)) return [];
-      const scriptMatch = home.body.toString("utf8").match(/src="(\/assets\/index-[^"]+\.js)"/);
-      if (!scriptMatch) return [];
+    const home = await this.request(`${BASE_URL}/`);
+    if (!isOk(home)) throw httpError("TDK home page", home);
+    const scriptMatch = home.body.toString("utf8").match(/src="(\/assets\/index-[^"]+\.js)"/);
+    if (!scriptMatch) throw new TDKParseError("TDK home page no longer links an /assets/index-*.js bundle.");
 
-      const bundle = await this.request(`${BASE_URL}${scriptMatch[1]}`, {
-        timeoutMs: Math.max(this.defaultTimeoutMs, BUNDLE_TIMEOUT_MS),
-      });
-      if (!isOk(bundle)) return [];
-      const bundleJs = bundle.body.toString("utf8");
+    const bundle = await this.request(`${BASE_URL}${scriptMatch[1]}`, {
+      timeoutMs: Math.max(this.defaultTimeoutMs, BUNDLE_TIMEOUT_MS),
+    });
+    if (!isOk(bundle)) throw httpError("TDK JS bundle", bundle);
+    const bundleJs = bundle.body.toString("utf8");
 
-      const startMarker = 'JSON.parse(`[{"madde":';
-      const startIdx = bundleJs.indexOf(startMarker);
-      if (startIdx === -1) return [];
-      const jsonStart = startIdx + "JSON.parse(".length + 1;
-      const jsonEnd = bundleJs.indexOf("`)", jsonStart);
-      if (jsonEnd === -1) return [];
+    const startMarker = 'JSON.parse(`[{"madde":';
+    const startIdx = bundleJs.indexOf(startMarker);
+    const jsonStart = startIdx + "JSON.parse(".length + 1;
+    const jsonEnd = startIdx === -1 ? -1 : bundleJs.indexOf("`)", jsonStart);
+    if (jsonEnd === -1) throw new TDKParseError("TDK JS bundle no longer embeds the headword list.");
 
-      const data = JSON.parse(bundleJs.slice(jsonStart, jsonEnd)) as { madde: string }[];
-      return data.map((item) => item.madde).filter(Boolean);
-    } catch (error) {
-      this.softFail(error);
-      return [];
-    }
+    const data = JSON.parse(bundleJs.slice(jsonStart, jsonEnd)) as { madde: string }[];
+    const words = data.map((item) => item.madde).filter(Boolean);
+    if (words.length === 0) throw new TDKParseError("TDK JS bundle embeds an empty headword list.");
+    return words;
   }
 
   private headwordDiskCachePath(): string | null {
@@ -402,31 +429,39 @@ export class TDKClient {
   /**
    * Resolves the headword list through its cache tiers: a fresh disk copy
    * (when `diskCache` is enabled), then the network, then a stale disk copy
-   * if the network scrape fails.
+   * if the network scrape fails (the failure is still reported). Throws when
+   * no tier has the list.
    */
   private async loadHeadwords(): Promise<string[]> {
     const disk = await this.readHeadwordDiskCache();
     if (disk && Date.now() - disk.savedAt < HEADWORD_DISK_TTL_MS) return disk.words;
 
-    const fresh = await this.fetchAutocompleteData();
-    if (fresh.length > 0) {
+    try {
+      const fresh = await this.fetchAutocompleteData();
       await this.writeHeadwordDiskCache(fresh);
       return fresh;
+    } catch (error) {
+      if (!disk) throw error;
+      this.reportError(toTDKError(error));
+      return disk.words;
     }
-    return disk?.words ?? [];
   }
 
   /**
    * Ensures TDK's ~81k headword list is loaded in memory for fast O(1) set operations.
-   * Concurrent callers share one in-flight load; a failed (empty) load is retried
-   * on the next call. An aborted `signal` stops waiting without cancelling the
-   * shared load.
+   * Concurrent callers share one in-flight load; a failed load is reported (or
+   * thrown in strict mode) and retried on the next call. An aborted `signal`
+   * stops waiting without cancelling the shared load.
    */
-  private ensureAutocompleteLoaded(signal?: AbortSignal): Promise<void> {
-    return raceAbort(
-      this.headwords.ensure(() => this.loadHeadwords()),
-      signal
-    );
+  private async ensureAutocompleteLoaded(signal?: AbortSignal): Promise<void> {
+    try {
+      await raceAbort(
+        this.headwords.ensure(() => this.loadHeadwords()),
+        signal
+      );
+    } catch (error) {
+      this.softFail(error, signal);
+    }
   }
 
   /**
@@ -660,8 +695,11 @@ export class TDKClient {
         },
         { signal }
       );
+      if (!isOk(res)) throw httpError("TDK gts-yeni", res);
       const data = JSON.parse(res.body.toString("utf8"));
-      return Array.isArray(data) ? data : null;
+      // An unknown word comes back as `[]`; anything else non-array means the endpoint changed.
+      if (!Array.isArray(data)) throw new TDKParseError("TDK gts-yeni response is not an array.");
+      return data;
     } catch (error) {
       this.softFail(error, signal);
       return null;
@@ -743,7 +781,7 @@ export class TDKClient {
     const finalPath = destPath || path.join(os.tmpdir(), `${word}.wav`);
     try {
       const res = await this.request(url, options);
-      if (!isOk(res)) return null;
+      if (!isOk(res)) throw httpError("TDK audio download", res);
       await fs.promises.writeFile(finalPath, res.body);
       return finalPath;
     } catch (error) {
@@ -790,7 +828,8 @@ export class TDKClient {
     }
 
     // 4. "Sıkça yapılan yanlışlar" from DailyContent
-    const daily = await this.getDailyContent(false, options);
+    // Auxiliary: a failing /icerik must not fail the spell check, even in strict mode.
+    const daily = await this.fetchDailyContent(false, options.signal, false);
     if (daily) {
       const syydMatch = daily.syyd.find((s) => s.yanliskelime.toLocaleLowerCase("tr-TR") === cleanWord);
       if (syydMatch) {
@@ -872,17 +911,25 @@ export class TDKClient {
    * caching is enabled the loop would just re-read the same cached response
    * 25 times and could never find a rule outside that first random draw.
    */
-  public async getDailyContent(bypassCache = false, options: RequestOptions = {}): Promise<DailyContent | null> {
+  public getDailyContent(bypassCache = false, options: RequestOptions = {}): Promise<DailyContent | null> {
+    return this.fetchDailyContent(bypassCache, options.signal);
+  }
+
+  private async fetchDailyContent(
+    bypassCache: boolean,
+    signal?: AbortSignal,
+    strict = this.strict
+  ): Promise<DailyContent | null> {
     if (!bypassCache && this.isCacheEnabled && this.dailyContentCache) return this.dailyContentCache;
 
     try {
-      const response = await this.request(`${BASE_URL}/icerik`, options);
-      if (!isOk(response)) return null;
+      const response = await this.request(`${BASE_URL}/icerik`, { signal });
+      if (!isOk(response)) throw httpError("TDK daily content", response);
       const data = JSON.parse(response.body.toString("utf8")) as DailyContent;
       if (!bypassCache && this.isCacheEnabled) this.dailyContentCache = data;
       return data;
     } catch (error) {
-      this.softFail(error, options.signal);
+      this.softFail(error, signal, strict);
       return null;
     }
   }
@@ -974,14 +1021,13 @@ export class TDKClient {
   private async fetchRuleText(url: string, signal?: AbortSignal): Promise<string | null> {
     try {
       const response = await this.request(url, { signal });
-      if (!isOk(response)) return null;
+      if (!isOk(response)) throw httpError("TDK rule page", response);
       const html = response.body.toString("utf8");
 
       const marker = html.indexOf('itemprop="text"');
-      if (marker === -1) return null;
       const contentStart = html.indexOf(">", marker) + 1;
-      const contentEnd = html.indexOf("<footer", contentStart);
-      if (contentEnd === -1) return null;
+      const contentEnd = marker === -1 ? -1 : html.indexOf("<footer", contentStart);
+      if (contentEnd === -1) throw new TDKParseError(`Rule page ${url} no longer has the expected article markup.`);
 
       return htmlToPlainText(html.slice(contentStart, contentEnd));
     } catch (error) {
@@ -1007,7 +1053,7 @@ export class TDKClient {
         },
         { signal }
       );
-      if (res.status !== 200) return null;
+      if (res.status !== 200) throw httpError("Kubbealtı Lugatı", res);
       return JSON.parse(res.body.toString("utf8"));
     } catch (error) {
       this.softFail(error, signal);
@@ -1052,7 +1098,11 @@ export class TDKClient {
     if (!word || word.trim() === "") return null;
 
     const data = await this.fetchKubbealtiJson(`/rest/s/${encodeURIComponent(word.trim())}/`, options.signal);
-    if (!data || !Array.isArray(data.content)) return null;
+    if (!data) return null;
+    if (!Array.isArray(data.content)) {
+      this.softFail(new TDKParseError("Kubbealtı Lugatı search response has no content array."), options.signal);
+      return null;
+    }
     if (data.content.length > 0) {
       return data.content.map((entry: any) => ({ kelime: entry.kelime, anlam: entry.anlam }));
     }
@@ -1089,7 +1139,11 @@ export class TDKClient {
       `/rest/word-search/${encodeURIComponent(prefix.trim())}`,
       options.signal
     );
-    if (!Array.isArray(data)) return [];
+    if (data === null) return [];
+    if (!Array.isArray(data)) {
+      this.softFail(new TDKParseError("Kubbealtı Lugatı suggestion response is not an array."), options.signal);
+      return [];
+    }
     return data.map((item: any) => item.display).filter(Boolean);
   }
 
@@ -1108,10 +1162,10 @@ export class TDKClient {
         `https://www.nisanyansozluk.com/kelime/${encodeURIComponent(word.trim().toLocaleLowerCase("tr-TR"))}`,
         options
       );
-      if (!isOk(response)) return null;
+      if (!isOk(response)) throw httpError("Nişanyan Sözlük", response);
       const html = response.body.toString("utf8");
       const match = html.match(/<meta name="description" content="([^"]*)"/);
-      if (!match) return null;
+      if (!match) throw new TDKParseError("Nişanyan Sözlük page no longer has a description meta tag.");
       const description = htmlToPlainText(match[1]);
       if (description === "Çağdaş Türkçenin Etimolojisi") return null;
       return description;
@@ -1127,7 +1181,7 @@ export class TDKClient {
         title
       )}&format=json&explaintext=1&formatversion=2`;
       const response = await this.request(url, { signal });
-      if (!isOk(response)) return null;
+      if (!isOk(response)) throw httpError("Wiktionary API", response);
       const data = JSON.parse(response.body.toString("utf8"));
       const page = data?.query?.pages?.[0];
       if (!page || page.missing || !page.extract) return null;

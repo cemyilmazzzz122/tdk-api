@@ -340,9 +340,10 @@ export function createMcpServer(): McpServer {
 /** Starts the TDK MCP server over stdio (used by the `tdk mcp` CLI command). */
 export async function runMcpServer(): Promise<void> {
   // Standalone server: persist the headword list on disk (opt out with TDK_DISK_CACHE=0)
-  // and warm it in the background so headword tools answer instantly.
-  TDK.configure({ diskCache: process.env.TDK_DISK_CACHE !== "0" });
-  void TDK.preloadHeadwords();
+  // and warm it in the background so headword tools answer instantly. Strict mode makes
+  // tools report "source unreachable" as an error instead of an empty result.
+  TDK.configure({ diskCache: process.env.TDK_DISK_CACHE !== "0", strict: true });
+  TDK.preloadHeadwords().catch(() => {});
 
   const server = createMcpServer();
   const transport = new StdioServerTransport();

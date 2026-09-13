@@ -1,3 +1,5 @@
+import type { TDKError } from "./errors";
+
 export interface Author {
   yazar_id: string;
   tam_adi: string;
@@ -179,6 +181,20 @@ export interface TDKConfig {
   retries?: number;
   cache?: boolean;
   maxCacheSize?: number;
+  /**
+   * Makes methods that normally degrade to `null`/`[]` on failure throw instead
+   * (`TDKNetworkError` for request/HTTP failures, `TDKParseError` when a source's
+   * content no longer matches what the scraper expects), so "not found" and
+   * "source unreachable" can be told apart. "Not found" still returns
+   * `null`/`[]`. Default: false.
+   */
+  strict?: boolean;
+  /**
+   * Called with every failure a non-strict client swallows (and with a stale
+   * disk copy fallback). Setting the `TDK_DEBUG` environment variable also
+   * logs them to stderr.
+   */
+  onError?: (error: TDKError) => void;
   /**
    * Persists TDK's ~81k headword list to disk so later processes start with
    * instant local autocomplete instead of re-downloading it (default: false).
