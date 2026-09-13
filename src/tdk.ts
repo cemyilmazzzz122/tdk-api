@@ -29,6 +29,7 @@ import { WORD_FREQUENCY_RANKS } from "./data/word-frequency";
 import { damerauLevenshtein, keyboardAwareDistance } from "./lib/edit-distance";
 import { htmlToPlainText } from "./lib/html";
 import { HeadwordStore } from "./lib/headword-store";
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -41,6 +42,8 @@ const BASE_URL = "https://sozluk.gov.tr";
 const AUDIO_API_HOST = "api.sozluk.gov.tr";
 const KUBBEALTI_HOST = "eski.lugatim.com";
 const HEADWORD_DISK_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** Dictionary entries rarely change, so cached lookups stay valid longer than the headword list. */
+const WORD_DISK_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 /** The headword bundle is a few MB, so it gets more time than a JSON lookup. */
 const BUNDLE_TIMEOUT_MS = 30_000;
 const USER_AGENT = "TDK-API-Nodejs-Wrapper/1.0";
@@ -168,13 +171,18 @@ export class TDKClient {
   }
 
   /**
-   * Deletes the on-disk headword cache written when `diskCache` is enabled.
-   * `clearCache()` only clears memory, so use this to force a fresh download.
+   * Deletes the on-disk caches written when `diskCache` is enabled (the
+   * headword list and cached word lookups). `clearCache()` only clears
+   * memory, so use this to force fresh downloads. Only files this library
+   * wrote are removed, never the rest of `diskCacheDir`.
    */
   public async clearDiskCache(): Promise<void> {
-    const file = this.headwordDiskCachePath();
-    if (!file) return;
-    await fs.promises.rm(file, { force: true }).catch(() => {});
+    const root = this.diskCacheRoot();
+    if (!root) return;
+    await Promise.all([
+      fs.promises.rm(path.join(root, "headwords.json"), { force: true }).catch(() => {}),
+      fs.promises.rm(path.join(root, "words"), { recursive: true, force: true }).catch(() => {}),
+    ]);
   }
 
   /**
@@ -318,6 +326,12 @@ export class TDKClient {
       if (cached) return cached;
     }
 
+    const fromDisk = await this.readWordDiskCache(cleanWord);
+    if (fromDisk) {
+      if (this.isCacheEnabled) this.setBoundedCache(this.wordCache, cleanWord, fromDisk);
+      return fromDisk;
+    }
+
     const url = `${BASE_URL}/gts?ara=${encodeURIComponent(cleanWord)}`;
 
     let response: HttpResponse;
@@ -350,6 +364,8 @@ export class TDKClient {
     if (this.isCacheEnabled) {
       this.setBoundedCache(this.wordCache, cleanWord, results);
     }
+    // Only found entries go to disk: a word TDK adds later must not stay "not found" for a month.
+    if (results.length > 0) await this.writeWordDiskCache(cleanWord, results);
     return results;
   }
 
@@ -408,14 +424,58 @@ export class TDKClient {
     return words;
   }
 
-  private headwordDiskCachePath(): string | null {
+  private diskCacheRoot(): string | null {
     if (!this.diskCacheEnabled) return null;
-    const dir =
+    return (
       this.diskCacheDir ??
       (process.platform === "win32" && process.env.LOCALAPPDATA
         ? path.join(process.env.LOCALAPPDATA, "tdk-api-wrapper")
-        : path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache"), "tdk-api-wrapper"));
-    return path.join(dir, "headwords.json");
+        : path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache"), "tdk-api-wrapper"))
+    );
+  }
+
+  private headwordDiskCachePath(): string | null {
+    const root = this.diskCacheRoot();
+    return root && path.join(root, "headwords.json");
+  }
+
+  /** Hashed file name: words may contain characters that aren't safe in paths. */
+  private wordDiskCachePath(cleanWord: string): string | null {
+    const root = this.diskCacheRoot();
+    if (!root) return null;
+    const hash = crypto.createHash("sha1").update(cleanWord).digest("hex");
+    return path.join(root, "words", `${hash}.json`);
+  }
+
+  /** Writes via a temp file + rename so readers never see a partial file; errors are ignored. */
+  private async writeJsonAtomic(file: string, data: unknown): Promise<void> {
+    const tmp = `${file}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+    try {
+      await fs.promises.mkdir(path.dirname(file), { recursive: true });
+      await fs.promises.writeFile(tmp, JSON.stringify(data));
+      await fs.promises.rename(tmp, file);
+    } catch {
+      await fs.promises.rm(tmp, { force: true }).catch(() => {});
+    }
+  }
+
+  private async readWordDiskCache(cleanWord: string): Promise<WordInfo[] | null> {
+    const file = this.wordDiskCachePath(cleanWord);
+    if (!file) return null;
+    try {
+      const data = JSON.parse(await fs.promises.readFile(file, "utf8"));
+      if (data?.word !== cleanWord || !Array.isArray(data.results) || data.results.length === 0) return null;
+      if (typeof data.savedAt !== "number" || Date.now() - data.savedAt >= WORD_DISK_TTL_MS) return null;
+      return data.results as WordInfo[];
+    } catch {
+      return null;
+    }
+  }
+
+  private async writeWordDiskCache(cleanWord: string, results: WordInfo[]): Promise<void> {
+    const file = this.wordDiskCachePath(cleanWord);
+    if (!file) return;
+    await this.writeJsonAtomic(file, { savedAt: Date.now(), word: cleanWord, results });
   }
 
   private async readHeadwordDiskCache(): Promise<{ savedAt: number; words: string[] } | null> {
@@ -435,14 +495,7 @@ export class TDKClient {
   private async writeHeadwordDiskCache(words: string[]): Promise<void> {
     const file = this.headwordDiskCachePath();
     if (!file) return;
-    const tmp = `${file}.${process.pid}.tmp`;
-    try {
-      await fs.promises.mkdir(path.dirname(file), { recursive: true });
-      await fs.promises.writeFile(tmp, JSON.stringify({ savedAt: Date.now(), words }));
-      await fs.promises.rename(tmp, file);
-    } catch {
-      await fs.promises.rm(tmp, { force: true }).catch(() => {});
-    }
+    await this.writeJsonAtomic(file, { savedAt: Date.now(), words });
   }
 
   /**

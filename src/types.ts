@@ -210,12 +210,13 @@ export interface TDKConfig {
    */
   onError?: (error: TDKError) => void;
   /**
-   * Persists TDK's ~81k headword list to disk so later processes start with
-   * instant local autocomplete instead of re-downloading it (default: false).
+   * Persists TDK's ~81k headword list (7 days) and found `getWord()` entries
+   * (30 days) to disk, so later processes start with instant local
+   * autocomplete and repeated lookups skip the network (default: false).
    */
   diskCache?: boolean;
   /**
-   * Directory for the headword disk cache (default: `$XDG_CACHE_HOME/tdk-api-wrapper`,
+   * Directory for the disk caches (default: `$XDG_CACHE_HOME/tdk-api-wrapper`,
    * `~/.cache/tdk-api-wrapper`, or `%LOCALAPPDATA%\tdk-api-wrapper` on Windows).
    */
   diskCacheDir?: string;
