@@ -24,6 +24,7 @@ import { mapWithConcurrency } from "./lib/pool";
 import { getStemCandidates } from "./morphology";
 import { COMMON_MISSPELLINGS, SEY_EXCEPTIONS } from "./data/misspellings";
 import { KUBBEALTI_EXTRA_CA } from "./data/kubbealti-ca";
+import { WORD_FREQUENCY_RANKS } from "./data/word-frequency";
 import { damerauLevenshtein, keyboardAwareDistance } from "./lib/edit-distance";
 import { htmlToPlainText } from "./lib/html";
 import { HeadwordStore } from "./lib/headword-store";
@@ -79,6 +80,20 @@ const STOPWORDS = new Set([
   "bir", "çok", "az", "gibi", "için", "mi", "mı", "mu", "mü", "ne", "her", "hiç",
   "ben", "sen", "biz", "siz", "onlar", "değil", "bile", "diye",
 ]);
+
+/**
+ * Added to a spelling suggestion's score when the candidate isn't among the
+ * common words in `WORD_FREQUENCY_RANKS`, so an everyday word beats an obscure
+ * headword at a similar distance ("eksoz" → "egzoz", not "eksiz"). Tuned on
+ * the single-word `COMMON_MISSPELLINGS` pairs: edit-distance-only fallback
+ * got 40/52 right, this penalty 44/52 (graded rank terms scored no better).
+ */
+const UNCOMMON_WORD_PENALTY = 0.7;
+let commonWords: Set<string> | null = null;
+function isCommonWord(word: string): boolean {
+  commonWords ??= new Set(WORD_FREQUENCY_RANKS.trim().split(/\s+/));
+  return commonWords.has(word);
+}
 
 /** Shared by every client: the headword list is public data, not per-user state. */
 const sharedHeadwords = new HeadwordStore();
@@ -883,7 +898,8 @@ export class TDKClient {
     // "swlam" picks "selam" because w->e is), while the plain integer Damerau-Levenshtein
     // still gates acceptance. Ties prefer matching first letter, then matching length, and
     // initial character mismatches are penalized so irrelevant foreign loanwords (like
-    // 'jersey') do not beat Turkish roots.
+    // 'jersey') do not beat Turkish roots. Headwords outside the common-word frequency list
+    // pay UNCOMMON_WORD_PENALTY, so the likelier everyday word wins among close candidates.
     let best:
       | { candidate: string; score: number; rawDist: number; firstMismatch: number; lengthMismatch: number }
       | null = null;
@@ -896,7 +912,10 @@ export class TDKClient {
 
       const firstMismatch = candidate[0] === cleanWord[0] ? 0 : 1;
       const lengthMismatch = candidate.length === cleanWord.length ? 0 : 1;
-      const score = keyboardAwareDistance(cleanWord, candidate) + (firstMismatch > 0 ? 1.2 : 0);
+      const score =
+        keyboardAwareDistance(cleanWord, candidate) +
+        (firstMismatch > 0 ? 1.2 : 0) +
+        (isCommonWord(candidate) ? 0 : UNCOMMON_WORD_PENALTY);
 
       const better =
         !best ||
