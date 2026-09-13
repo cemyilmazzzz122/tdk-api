@@ -177,7 +177,7 @@ async function run() {
   }
 
   if (command === "--version" || command === "-v") {
-    console.log("tdk-api-wrapper v1.7.0");
+    console.log("tdk-api-wrapper v1.8.0");
     process.exit(0);
   }
 

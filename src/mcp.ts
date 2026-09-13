@@ -3,7 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { TDK } from "./tdk";
 
-const VERSION = "1.7.0";
+const VERSION = "1.8.0";
 
 type ToolResult = {
   content: { type: "text"; text: string }[];
