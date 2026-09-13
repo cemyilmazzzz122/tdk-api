@@ -56,7 +56,9 @@ tdk ara kalem --json
 # ["Yazma, çizme vb. işlerde kullanılan çeşitli biçimlerde araç", ...]
 ```
 
-Argümansız `tdk` veya `tdk repl` çalıştırıldığında interaktif sözlük kabuğu açılır.
+Argümansız `tdk` veya `tdk repl` çalıştırıldığında interaktif sözlük kabuğu açılır. Kabuk açılırken madde listesini arka planda yükler; kelime yazarken **Tab** tuşu TDK maddeleri üzerinden anında otomatik tamamlama yapar.
+
+CLI ve MCP sunucusu, TDK'nin ~81 bin kelimelik madde listesini (`oneri`, `yazim`, `bulmaca`, `anagram`, `kafiye`, `denetle` bunu kullanır) diskte önbelleğe alır (`~/.cache/tdk-api-wrapper/headwords.json`, 7 gün geçerli); böylece sonraki çalıştırmalar listeyi yeniden indirmez. Kapatmak için `TDK_DISK_CACHE=0` ortam değişkenini verin.
 
 ## Kullanım Başlangıcı
 
@@ -70,7 +72,9 @@ TDK.configure({
   timeoutMs: 8000,   // İstek zaman aşımı (varsayılan: 8000ms)
   retries: 1,        // 5xx ve ağ hatalarında otomatik tekrar (varsayılan: 1)
   cache: true,       // Bellek içi önbelleği aktif etme
-  maxCacheSize: 1000 // Maksimum önbellek boyutu (LRU)
+  maxCacheSize: 1000, // Maksimum önbellek boyutu (LRU)
+  diskCache: true,    // Madde listesini diske yaz (varsayılan: false)
+  // diskCacheDir: '/özel/dizin' // Varsayılan: $XDG_CACHE_HOME veya ~/.cache altında tdk-api-wrapper
 });
 
 // İsteğe bağlı: Ayrı yapılandırmaya sahip bağımsız istemci örneği (Multi-tenant/Backend için)
@@ -123,7 +127,10 @@ Aşağıdaki metotlar `TDK` sınıfı üzerinden statik olarak veya `TDKClient` 
 - **`TDK.analyzeText(text)`**: Bir metindeki (Türkçe bağlaçlar/edatlar hariç) her benzersiz kelimeyi tek tek arayıp ilk anlamını, kökenini ve varsa kökünü döner. Çekimli kelimeleri morfoloji motoruyla otomatik tespit edip kökleriyle (`isInflected: true, root: "..."`) birlikte analiz eder.
 
 ### 7. Yardımcı Metotlar
-- **`TDK.getSuggestions(prefix)`**: TDK'nin ~81 bin kelimelik tam madde listesi üzerinden önek bazlı otomatik tamamlama önerileri döner (ilk çağrıda listeyi indirip önbelleğe alır, sonraki çağrılar anlıktır).
+- **`TDK.getSuggestions(prefix, limit = 10)`**: TDK'nin ~81 bin kelimelik tam madde listesi üzerinden önek bazlı otomatik tamamlama önerilerini Türk alfabesi sırasıyla döner. İlk çağrıda listeyi indirip önbelleğe alır; aramalar Türkçe sıralı bir önek indeksinde ikili arama (binary search) ile yapıldığı için sonraki çağrılar mikrosaniyeler sürer. Aynı anda gelen çağrılar tek bir indirmeyi paylaşır.
+- **`TDK.getInstantSuggestions(prefix, limit = 10)`**: `getSuggestions()`'ın senkron hâli. Liste bellekte değilse ağa gitmez, `[]` döner. Yazdıkça öneri gösteren arayüzler (REPL, TUI, editör eklentisi) içindir.
+- **`TDK.preloadHeadwords()`**: Madde listesini önceden yükler (örn. uygulama açılışında), böylece ilk öneri de anında gelir. Liste yüklendiyse `true` döner.
+- **`TDK.clearDiskCache()`**: `diskCache` açıkken diske yazılan madde listesini siler. Listenin önbellek katmanları sırasıyla: bellek → disk (7 gün geçerli) → ağ. Ağ hatasında süresi geçmiş disk kopyası kullanılır. `clearCache()` yalnızca belleği temizler.
 - **`TDK.getAudioUrl(word)`**: TDK'nin bu kelime için gerçekten bir ses kaydı varsa doğrudan indirme URL'sini döner, yoksa `null`. `downloadAudio(word, destPath)` ile cihazınıza indirebilirsiniz.
 - **`TDK.getDailyContent()`**: TDK anasayfasında yer alan "Günün Kelimesi, Atasözü ve Kuralı" içeriklerini çeker.
 - **`TDK.getWordOfTheDay()`**: `getDailyContent()`'in üzerine ince bir katman; günün kelimesini ve tüm anlamlarını `{ word, meanings }` şeklinde döner.
@@ -156,7 +163,7 @@ Paket, bir MCP stdio sunucusu içerir; böylece TDK sözlük, morfoloji, yazım 
 
 Global kuruluysa `tdk mcp` (veya `tdk-mcp`) komutu da aynı sunucuyu başlatır. Sunucu programatik olarak dışa aktarılan `createMcpServer()` / `runMcpServer()` ile de gömülebilir.
 
-Sunulan araçlar: `tdk_lookup`, `tdk_meanings`, `tdk_examples`, `tdk_proverbs`, `tdk_compound_words`, `tdk_part_of_speech`, `tdk_synonyms`, `tdk_antonyms`, `tdk_origin`, `tdk_nisanyan`, `tdk_kubbealti`, `tdk_wiktionary`, `tdk_spell_check`, `tdk_proofread`, `tdk_stem`, `tdk_analyze_text`, `tdk_syllables`, `tdk_vowel_harmony`, `tdk_autocomplete`, `tdk_pattern_search`, `tdk_anagram`, `tdk_rhymes`, `tdk_compare`, `tdk_audio_url`, `tdk_word_of_the_day`, `tdk_random_word`, `tdk_rules`. Her araç JSON metin döndürür; ağ/scraping hataları fırlatmak yerine `isError: true` ile `{ "error": ... }` olarak döner.
+Sunulan araçlar: `tdk_lookup`, `tdk_meanings`, `tdk_examples`, `tdk_proverbs`, `tdk_compound_words`, `tdk_part_of_speech`, `tdk_synonyms`, `tdk_antonyms`, `tdk_origin`, `tdk_nisanyan`, `tdk_kubbealti`, `tdk_wiktionary`, `tdk_spell_check`, `tdk_proofread`, `tdk_stem`, `tdk_analyze_text`, `tdk_syllables`, `tdk_vowel_harmony`, `tdk_autocomplete`, `tdk_pattern_search`, `tdk_anagram`, `tdk_rhymes`, `tdk_compare`, `tdk_audio_url`, `tdk_word_of_the_day`, `tdk_random_word`, `tdk_rules`. `tdk_autocomplete` isteğe bağlı `max_results` (1–100) parametresi alır; sunucu açılışta madde listesini arka planda yükler ve diskte önbelleğe alır. Her araç JSON metin döndürür; ağ/scraping hataları fırlatmak yerine `isError: true` ile `{ "error": ... }` olarak döner.
 
 ## Hata Yönetimi
 
